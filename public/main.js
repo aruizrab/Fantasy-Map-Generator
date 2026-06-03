@@ -204,8 +204,9 @@ function getDefaultSunAxisConfig() {
     subsidenceDryness: 0.35,
     // Orographic lift sensitivity to terrain height.
     orographicFactor: 1.0,
-    // Mean free path (in cells) that ocean moisture advects inland before raining out.
-    moistureTravel: 35,
+    // E-folding travel length (in cells, at the 10k-cell reference resolution) for ocean moisture
+    // advecting inland before it rains out. Smaller = sharper coast-to-interior drying (desert interiors).
+    moistureTravel: 12,
     // Global precipitation scale (matches Classic's precInput role).
     precipScale: 1.0
   };
@@ -1016,6 +1017,11 @@ function calculateTemperaturesSunAxis() {
   const {cfg, subsolarLatitude: decl} = getSunAxisGeometry();
   const exponent = +heightExponentInput.value;
   const DEG = Math.PI / 180;
+  // clamp target temperatures to a sane range (defense-in-depth: keeps cell temps < 50°C so the
+  // downstream lake-evaporation denominator (80 - lakeTemp) can never reach/cross zero, matching
+  // Classic's UI cap; peakTemp/nightCapTemp are coefficients with no UI bound)
+  const peakTemp = minmax(+cfg.peakTemp || 0, -50, 50);
+  const nightCapTemp = minmax(+cfg.nightCapTemp || 0, -128, peakTemp);
 
   // daily-mean insolation factor over one rotation, with phi_s as the solar declination.
   // returns {H: mean insolation in [0,1], dayFraction: fraction of rotation the sun is up}
@@ -1039,7 +1045,7 @@ function calculateTemperaturesSunAxis() {
   function seaLevelTemp(latDeg) {
     const {H, dayFraction} = insolation(latDeg);
     const shaped = Math.pow(H / Hmax, cfg.insolationExponent);
-    let t = cfg.nightCapTemp + (cfg.peakTemp - cfg.nightCapTemp) * shaped;
+    let t = nightCapTemp + (peakTemp - nightCapTemp) * shaped;
     // diurnal cooling for the rotating day/night band (max where the cell is lit ~half the rotation)
     if (cfg.rotationBand) t -= cfg.bandCoolingC * 4 * (1 - dayFraction) * dayFraction;
     return t;
@@ -1164,8 +1170,10 @@ function generatePrecipitationSunAxis() {
   const tempSpan = Math.max(1, cfg.peakTemp - FREEZE);
   // resolution-aware: denser grids have more cells per physical distance, so moisture travels more
   // cells to cover the same ground (same idea as Classic's cellsNumberModifier)
-  const cellsNumberModifier = (pointsInput.dataset.cells / 10000) ** 0.25;
-  const travel = Math.max(1, cfg.moistureTravel * cellsNumberModifier);
+  // moisture travels more cells on denser grids to cover the same physical distance: cells-per-
+  // distance scales ~ sqrt(cell count), so the e-folding travel length scales the same way.
+  const resolutionScale = (pointsInput.dataset.cells / 10000) ** 0.5;
+  const travel = Math.max(1, cfg.moistureTravel * resolutionScale);
   const precInputModifier = precInput.value / 100;
   const outputScale = 50 * precInputModifier * cfg.precipScale;
 
@@ -1232,15 +1240,17 @@ function generatePrecipitationSunAxis() {
     for (let i = rowCellId; i < rowCellId + cellsX && i < n; i++) {
       if (h[i] < 20) continue; // water cells handled by the engine separately
       const reach = Math.exp(-dist[i] / travel); // ocean moisture availability after rainout
-      const convective = cfg.convectionStrength * warmth(i);
-      // orographic lift: moist air climbing terrain from the ocean-ward (lower optical-depth) neighbour
+      // orographic lift: moist air climbing terrain from the ocean-ward (lower optical-depth) neighbour.
+      // Gated by warmth so the cold/frozen night cap stays dry (cold air holds negligible water vapor) —
+      // without this gate, frozen night-cap mountains would still "rain" from pure orographic lift.
+      const w = warmth(i);
       let upwindH = h[i];
       for (const nb of neighbors[i]) if (dist[nb] < dist[i] && h[nb] < upwindH) upwindH = h[nb];
-      const oro = (cfg.orographicFactor * Math.max(0, h[i] - upwindH)) / 20;
-      const p = outputScale * reach * (convective + oro) * dry;
+      const oro = ((cfg.orographicFactor * Math.max(0, h[i] - upwindH)) / 20) * w;
+      const p = outputScale * reach * (cfg.convectionStrength * w + oro) * dry;
       cells.prec[i] = minmax(Math.round(p), 0, 255);
       totalAll += cells.prec[i];
-      if (warmth(i) > 0.6) totalLit += cells.prec[i];
+      if (w > 0.6) totalLit += cells.prec[i];
     }
   }
 

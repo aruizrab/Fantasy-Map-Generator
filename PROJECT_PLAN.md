@@ -49,9 +49,9 @@ verbatim in `ARCHITECTURE.md` for diff reference.
 | T0 | Architecture map, pin commit, baseline | — | PASS |
 | T1 | Planetary config + UI + save/load + Classic toggle | T0 | PASS |
 | T2 | Insolation & temperature model | T1 | PASS |
-| T3 | Moisture circulation & precipitation model | T2 | IMPL DONE (evaluating) |
-| T4 | Biome cascade verification / retune | T3 | IN PROGRESS |
-| T5 | River & lake cascade verification | T3 | IN PROGRESS |
+| T3 | Moisture circulation & precipitation model | T2 | IMPL DONE (re-evaluating, cycle 2) |
+| T4 | Biome cascade verification / retune | T3 | IMPL DONE (validated) |
+| T5 | River & lake cascade verification | T3 | PASS |
 | T6 | Population/burg/location cascade verification | T4 | BLOCKED |
 | T7 | End-to-end integration + regression | T4,T5,T6 | BLOCKED |
 | T8 | Documentation & handoff | T7 | BLOCKED |
@@ -75,6 +75,19 @@ Status legend: BLOCKED → IN PROGRESS → IMPL DONE → PASS / FAIL (evaluator-
   + orographic lift. Resolution-aware travel; reuses precInput slider. Validated by prototype +
   integration harness on the REAL function: wet lit coast 69, desert interior 14, orographic boost,
   dry band/night cap, bounded budget, no NaN. Classic precipitation untouched.
+- 2026-06-03: T3 cycle-1 evaluator FAIL: frozen night-cap mountains still "rained" because the
+  orographic term lacked a temperature gate (convective term was already freeze-gated). Fixed by
+  multiplying orographic lift by warmth(i) → cold cap goes dry (night-cap mountain prec 35→0).
+- 2026-06-03: T4 validated (cascade harness on real T2+T3 outputs): biome matrix unchanged (pure
+  f(temp,prec,height) generalizes), lit coast = Tropical rainforest, lit interior = Hot desert, night
+  cap = Glacier, no unclassified cells, full rainforest→savanna→desert gradient. The two-tool
+  discrepancy (lush coast + desert interior) is resolved WITHOUT retuning the matrix. This required a
+  T3 calibration: moistureTravel default 35→12 + sqrt resolution scaling so interiors reach the desert
+  band while coasts stay lush. No biome-matrix changes.
+- 2026-06-03: T5 PASS (independent evaluator): rivers/lakes consume climate only via pack.cells.g and
+  re-derive cleanly; rivers nucleate in the rain belt, hot-cap lakes trend evaporative; no NaN/Inf.
+  Applied its defense-in-depth suggestion: clamp peakTemp to [-50,50] (and nightCapTemp ≤ peakTemp) so
+  the lake-evaporation denominator (80 − lakeTemp) can never reach zero even via console/save-file edits.
 - 2026-06-03: T2 implemented. Sun-axis temperature uses the standard daily-mean insolation integral
   with phi_s (=90−tilt) as solar "declination". Validated by prototype + integration harness against
   a synthetic grid: lit cap warmest (integrated-warmth peak toward lit pole), instantaneous-noon peak
