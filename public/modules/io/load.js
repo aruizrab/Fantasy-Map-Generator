@@ -257,6 +257,10 @@ async function parseLoadedData(data, mapVersion) {
       // setting 16 and 17 (temperature) are part of options now, kept as "" in newer versions for compatibility
       if (settings[16]) options.temperatureEquator = +settings[16];
       if (settings[17]) options.temperatureNorthPole = options.temperatureSouthPole = +settings[17];
+      // backward compatibility: ensure Sun-axis climate fields exist (maps saved before this feature
+      // default to the Classic model, and any partial sunAxis block is merged onto current defaults)
+      if (!options.climateModel) options.climateModel = "classic";
+      options.sunAxis = {...getDefaultSunAxisConfig(), ...(options.sunAxis || {})};
       if (settings[20]) mapName.value = settings[20];
       if (settings[21]) hideLabels.checked = +settings[21];
       if (settings[22]) stylePreset.value = settings[22];

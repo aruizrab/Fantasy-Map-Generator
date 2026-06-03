@@ -47,7 +47,7 @@ verbatim in `ARCHITECTURE.md` for diff reference.
 | Task | Description | Deps | Status |
 |------|-------------|------|--------|
 | T0 | Architecture map, pin commit, baseline | — | PASS |
-| T1 | Planetary config + UI + save/load + Classic toggle | T0 | IN PROGRESS |
+| T1 | Planetary config + UI + save/load + Classic toggle | T0 | IMPL DONE (evaluating) |
 | T2 | Insolation & temperature model | T1 | BLOCKED |
 | T3 | Moisture circulation & precipitation model | T2 | BLOCKED |
 | T4 | Biome cascade verification / retune | T3 | BLOCKED |

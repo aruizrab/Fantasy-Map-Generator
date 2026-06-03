@@ -152,12 +152,64 @@ let options = {
   temperatureEquator: 27,
   temperatureNorthPole: -30,
   temperatureSouthPole: -15,
+  // Climate model selector: "classic" (upstream Earth-like) or "sunAxis" (spin axis points near the star).
+  // See SUN_AXIS_CLIMATE.md and getDefaultSunAxisConfig() for the physics and tunable coefficients.
+  climateModel: "classic",
+  sunAxis: getDefaultSunAxisConfig(),
   stateLabelsMode: "auto",
   showBurgPreview: true,
   burgs: {
     groups: JSON.safeParse(localStorage.getItem("burg-groups")) || Burgs.getDefaultGroups()
   }
 };
+
+// Single tunable coefficient block for the Sun-axis climate model (planet whose spin axis points
+// near its star). All "magic numbers" of the new physics live here so they can be tuned/persisted.
+// Stored on options.sunAxis so it round-trips through .map save/load automatically.
+function getDefaultSunAxisConfig() {
+  return {
+    // --- Geometry (user-facing) ---
+    // Axial tilt = angle (deg) between the spin axis and the planet->star line.
+    // tilt=0 => sun fixed over the sunward pole; larger tilt => sub-solar point further from the pole.
+    axialTilt: 18,
+    // Derived sub-solar latitude phi_s = 90 - axialTilt (only latitude where the sun reaches zenith).
+    // null => auto-derive from axialTilt; set a number to override.
+    subsolarLatitude: null,
+    // Which pole faces the star (the permanent-day cap). "north" => +90 lit, -90 dark.
+    sunwardPole: "north",
+    // Whether the day/night band actually rotates (cools each rotation). If false the band is treated
+    // as if frozen in place (no diurnal radiative cooling penalty).
+    rotationBand: true,
+
+    // --- Temperature model (T2) ---
+    // Target hottest sea-level temperature (deg C), reached near the integrated-warmth peak.
+    peakTemp: 32,
+    // Target sea-level temperature (deg C) of the permanent-night cap.
+    nightCapTemp: -55,
+    // Exponent shaping daily-mean insolation -> temperature (lower spreads warmth poleward).
+    insolationExponent: 0.5,
+    // Ocean thermal inertia: 0 = none, 1 = ocean fully relaxed toward the global mean temperature.
+    oceanThermalInertia: 0.35,
+    // Extra cooling (deg C) applied to day/night-band cells that radiate heat every rotation.
+    bandCoolingC: 8,
+
+    // --- Moisture / precipitation model (T3) ---
+    // Base evaporation rate from ocean cells (dimensionless source strength).
+    oceanEvaporation: 1.0,
+    // How strongly cell temperature boosts evaporation (per deg C above 0).
+    evaporationTempFactor: 0.03,
+    // Convergence/convective rainfall multiplier over the hot lit cap where ocean moisture is reachable.
+    convectionStrength: 1.6,
+    // Dryness multiplier (0..1) for descending-air belts between the hot cap and the cold cap.
+    subsidenceDryness: 0.35,
+    // Orographic lift sensitivity to terrain height.
+    orographicFactor: 1.0,
+    // Mean free path (in cells) that ocean moisture advects inland before raining out.
+    moistureTravel: 35,
+    // Global precipitation scale (matches Classic's precInput role).
+    precipScale: 1.0
+  };
+}
 
 // global style object; in v2.0 to be used for all map styles and render settings
 let style = {burgLabels: {}, burgIcons: {}, anchors: {}};
@@ -924,8 +976,34 @@ function calculateMapCoordinates() {
 
 // temperature model, trying to follow real-world data
 // based on http://www-das.uwyo.edu/~geerts/cwx/notes/chap16/Image64.gif
+// Climate model dispatcher: routes to the upstream Earth-like model ("classic") or the
+// Sun-axis model (spin axis points near the star). Classic is the regression safety net and
+// is byte-for-behavior identical to upstream.
 function calculateTemperatures() {
   TIME && console.time("calculateTemperatures");
+  if (options.climateModel === "sunAxis") calculateTemperaturesSunAxis();
+  else calculateTemperaturesClassic();
+  TIME && console.timeEnd("calculateTemperatures");
+}
+
+// Resolve the effective sub-solar latitude phi_s (deg) and lit-pole sign from the Sun-axis config.
+// phi_s = 90 - axialTilt, mirrored to the dark hemisphere when the sunward pole is "south".
+function getSunAxisGeometry() {
+  const cfg = options.sunAxis || getDefaultSunAxisConfig();
+  const tilt = minmax(+cfg.axialTilt || 0, 0, 90);
+  const sign = cfg.sunwardPole === "south" ? -1 : 1;
+  const derived = 90 - tilt;
+  const subsolar = cfg.subsolarLatitude === null || cfg.subsolarLatitude === undefined ? derived : +cfg.subsolarLatitude;
+  return {cfg, tilt, sign, subsolarLatitude: sign * Math.abs(subsolar)};
+}
+
+// T1 placeholder: until T2 lands, the Sun-axis temperature model falls back to the Classic model so
+// flipping the toggle never breaks generation. Replaced by the real insolation model in T2.
+function calculateTemperaturesSunAxis() {
+  calculateTemperaturesClassic();
+}
+
+function calculateTemperaturesClassic() {
   const cells = grid.cells;
   cells.temp = new Int8Array(cells.i.length); // temperature array
 
@@ -968,12 +1046,21 @@ function calculateTemperatures() {
     const height = Math.pow(h - 18, exponent);
     return rn((height / 1000) * 6.5);
   }
-
-  TIME && console.timeEnd("calculateTemperatures");
 }
 
 // simplest precipitation model
 function generatePrecipitation() {
+  if (options.climateModel === "sunAxis") return generatePrecipitationSunAxis();
+  return generatePrecipitationClassic();
+}
+
+// T1 placeholder: until T3 lands, the Sun-axis moisture model falls back to the Classic model.
+// Replaced by the real moisture-circulation model in T3.
+function generatePrecipitationSunAxis() {
+  return generatePrecipitationClassic();
+}
+
+function generatePrecipitationClassic() {
   TIME && console.time("generatePrecipitation");
   prec.selectAll("*").remove();
   const {cells, cellsX, cellsY} = grid;
