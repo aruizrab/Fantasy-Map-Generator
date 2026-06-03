@@ -39,6 +39,15 @@ function editWorld() {
   updateWindDirections();
 
   ensureEl("worldControls").on("input", handleControlsChange);
+  ensureEl("climateModelInput").on("change", handleClimateModelChange);
+  ensureEl("sunAxisPoleInput").on("change", handleSunAxisChange);
+  ensureEl("sunAxisRotationInput").on("change", handleSunAxisChange);
+  ensureEl("sunAxisSubsolarAuto").on("click", () => {
+    options.sunAxis.subsolarLatitude = null;
+    ensureEl("sunAxisSubsolarInput").value = "";
+    updateSubsolarDerived();
+    if (ensureEl("wcAutoChange").checked) updateWorld();
+  });
   ensureEl("restoreWinds").on("click", restoreDefaultWinds);
   ensureEl("wcWholeWorld").on("click", () => applyWorldPreset(100, 50));
   ensureEl("wcNorthern").on("click", () => applyWorldPreset(33, 25));
@@ -46,6 +55,21 @@ function editWorld() {
   ensureEl("wcSouthern").on("click", () => applyWorldPreset(33, 75));
 
   function updateInputValues() {
+    if (!options.sunAxis) options.sunAxis = getDefaultSunAxisConfig();
+    const sa = options.sunAxis;
+    ensureEl("climateModelInput").value = options.climateModel || "classic";
+    ensureEl("sunAxisTiltInput").value = sa.axialTilt;
+    ensureEl("sunAxisTiltOutput").value = sa.axialTilt;
+    ensureEl("sunAxisSubsolarInput").value = sa.subsolarLatitude === null || sa.subsolarLatitude === undefined ? "" : sa.subsolarLatitude;
+    ensureEl("sunAxisPoleInput").value = sa.sunwardPole || "north";
+    ensureEl("sunAxisRotationInput").checked = sa.rotationBand !== false;
+    ensureEl("sunAxisHeatInput").value = ensureEl("sunAxisHeatOutput").value = sa.heatTransport;
+    ensureEl("sunAxisCoriolisInput").value = ensureEl("sunAxisCoriolisOutput").value = sa.coriolis;
+    ensureEl("sunAxisTravelInput").value = ensureEl("sunAxisTravelOutput").value = sa.moistureTravel;
+    ensureEl("sunAxisWetnessInput").value = ensureEl("sunAxisWetnessOutput").value = sa.precipScale;
+    updateClimateModelVisibility();
+    updateSubsolarDerived();
+
     ensureEl("temperatureEquatorInput").value = options.temperatureEquator;
     ensureEl("temperatureEquatorOutput").value = options.temperatureEquator;
     ensureEl("temperatureEquatorF").innerText = convertTemperature(options.temperatureEquator, "°F");
@@ -61,6 +85,55 @@ function editWorld() {
 
   function handleControlsChange({target}) {
     const stored = target.dataset.stored;
+
+    // these have dedicated "change" handlers (no Input/Output/lock triplet) — ignore here
+    if (stored === "climateModel" || stored === "sunAxisPole" || stored === "sunAxisRotation") return;
+
+    // Sun-axis numeric controls (handled separately; some lack a lock/Output pair)
+    if (stored === "sunAxisTilt") {
+      ensureEl("sunAxisTiltInput").value = target.value;
+      ensureEl("sunAxisTiltOutput").value = target.value;
+      options.sunAxis.axialTilt = minmax(Number(target.value), 0, 90);
+      updateSubsolarDerived();
+      if (ensureEl("wcAutoChange").checked) updateWorld();
+      return;
+    }
+    if (stored === "sunAxisSubsolar") {
+      const v = target.value;
+      options.sunAxis.subsolarLatitude = v === "" ? null : minmax(Number(v), -90, 90);
+      updateSubsolarDerived();
+      if (ensureEl("wcAutoChange").checked) updateWorld();
+      return;
+    }
+    if (stored === "sunAxisHeat") {
+      ensureEl("sunAxisHeatInput").value = target.value;
+      ensureEl("sunAxisHeatOutput").value = target.value;
+      options.sunAxis.heatTransport = minmax(Number(target.value), 0, 1);
+      if (ensureEl("wcAutoChange").checked) updateWorld();
+      return;
+    }
+    if (stored === "sunAxisCoriolis") {
+      ensureEl("sunAxisCoriolisInput").value = target.value;
+      ensureEl("sunAxisCoriolisOutput").value = target.value;
+      options.sunAxis.coriolis = minmax(Number(target.value), 0, 1);
+      if (ensureEl("wcAutoChange").checked) updateWorld();
+      return;
+    }
+    if (stored === "sunAxisTravel") {
+      ensureEl("sunAxisTravelInput").value = target.value;
+      ensureEl("sunAxisTravelOutput").value = target.value;
+      options.sunAxis.moistureTravel = minmax(Number(target.value), 2, 30);
+      if (ensureEl("wcAutoChange").checked) updateWorld();
+      return;
+    }
+    if (stored === "sunAxisWetness") {
+      ensureEl("sunAxisWetnessInput").value = target.value;
+      ensureEl("sunAxisWetnessOutput").value = target.value;
+      options.sunAxis.precipScale = minmax(Number(target.value), 0.2, 2);
+      if (ensureEl("wcAutoChange").checked) updateWorld();
+      return;
+    }
+
     ensureEl(stored + "Input").value = target.value;
     ensureEl(stored + "Output").value = target.value;
     lock(stored);
@@ -77,6 +150,33 @@ function editWorld() {
     }
 
     if (ensureEl("wcAutoChange").checked) updateWorld();
+  }
+
+  function handleClimateModelChange({target}) {
+    options.climateModel = target.value === "sunAxis" ? "sunAxis" : "classic";
+    updateClimateModelVisibility();
+    if (ensureEl("wcAutoChange").checked) updateWorld();
+  }
+
+  function handleSunAxisChange() {
+    options.sunAxis.sunwardPole = ensureEl("sunAxisPoleInput").value === "south" ? "south" : "north";
+    options.sunAxis.rotationBand = ensureEl("sunAxisRotationInput").checked;
+    updateSubsolarDerived();
+    if (ensureEl("wcAutoChange").checked) updateWorld();
+  }
+
+  function updateClimateModelVisibility() {
+    const isSunAxis = (options.climateModel || "classic") === "sunAxis";
+    ensureEl("sunAxisControls").style.display = isSunAxis ? null : "none";
+  }
+
+  // show the effective sub-solar latitude (auto = 90 − tilt, mirrored to the sunward pole)
+  function updateSubsolarDerived() {
+    const sa = options.sunAxis;
+    const sign = sa.sunwardPole === "south" ? -1 : 1;
+    const derived = sign * (90 - minmax(Number(sa.axialTilt) || 0, 0, 90));
+    const effective = sa.subsolarLatitude === null || sa.subsolarLatitude === undefined ? derived : sa.subsolarLatitude;
+    ensureEl("sunAxisSubsolarDerived").innerText = rn(effective, 1);
   }
 
   function updateWorld() {

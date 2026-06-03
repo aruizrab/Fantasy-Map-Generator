@@ -2500,6 +2500,75 @@
         <div style="display: flex">
           <div id="worldControls">
             <div>
+              <label data-tip="Climate model: Classic is the upstream Earth-like model; Sun-axis models a planet whose spin axis points near its star">
+                <i>Climate model:</i>
+                <select id="climateModelInput" data-stored="climateModel" style="width: 14em">
+                  <option value="classic">Classic (upstream)</option>
+                  <option value="sunAxis">Sun-axis</option>
+                </select>
+              </label>
+            </div>
+            <div id="sunAxisControls" style="display: none; border-left: 2px solid #ccc; padding-left: 0.6em; margin-bottom: 0.3em">
+              <div>
+                <label data-tip="Axial tilt: angle (°) between the spin axis and the planet→star line. 0 = sun fixed over the sunward pole">
+                  <i>Axial tilt:</i>
+                  <input id="sunAxisTiltInput" data-stored="sunAxisTilt" type="number" min="0" max="90" step="1" style="width: 4em" />
+                  <span>° → sub-solar lat <span id="sunAxisSubsolarDerived"></span>°</span>
+                  <input id="sunAxisTiltOutput" data-stored="sunAxisTilt" type="range" min="0" max="90" step="1" />
+                </label>
+              </div>
+              <div>
+                <label data-tip="Sub-solar latitude (only latitude where the sun reaches the zenith). Leave on Auto to derive from tilt (90 − tilt)">
+                  <i>Sub-solar lat:</i>
+                  <input id="sunAxisSubsolarInput" data-stored="sunAxisSubsolar" type="number" min="-90" max="90" step="1" placeholder="auto" style="width: 4em" />
+                  <button id="sunAxisSubsolarAuto" data-tip="Reset to auto (90 − tilt)" style="padding: 0 0.4em">Auto</button>
+                </label>
+              </div>
+              <div>
+                <label data-tip="Which pole faces the star (the permanent-day cap)">
+                  <i>Sunward pole:</i>
+                  <select id="sunAxisPoleInput" data-stored="sunAxisPole" style="width: 8em">
+                    <option value="north">North (+90°)</option>
+                    <option value="south">South (−90°)</option>
+                  </select>
+                </label>
+              </div>
+              <div>
+                <label data-tip="If on, the day/night band rotates and radiates heat away each rotation (cooler band)">
+                  <input id="sunAxisRotationInput" data-stored="sunAxisRotation" class="checkbox" type="checkbox" />
+                  <span class="checkbox-label">Rotating day/night band</span>
+                </label>
+              </div>
+              <div>
+                <label data-tip="Heat carried from the hot lit cap to the cold dark cap by winds and ocean currents. Higher = warmer dark side and a gentler temperature gradient">
+                  <i>Heat transport:</i>
+                  <input id="sunAxisHeatInput" data-stored="sunAxisHeat" type="number" min="0" max="1" step="0.05" style="width: 4em" />
+                  <input id="sunAxisHeatOutput" data-stored="sunAxisHeat" type="range" min="0" max="1" step="0.05" />
+                </label>
+              </div>
+              <div>
+                <label data-tip="Coriolis deflection of the prevailing winds from the planet's spin. 0 = winds blow straight toward the hot cap; higher = winds spiral, shifting rain belts and rain shadows sideways">
+                  <i>Coriolis:</i>
+                  <input id="sunAxisCoriolisInput" data-stored="sunAxisCoriolis" type="number" min="0" max="1" step="0.05" style="width: 4em" />
+                  <input id="sunAxisCoriolisOutput" data-stored="sunAxisCoriolis" type="range" min="0" max="1" step="0.05" />
+                </label>
+              </div>
+              <div>
+                <label data-tip="How far ocean moisture reaches inland before raining out. Lower = drier, larger desert interiors">
+                  <i>Moisture reach:</i>
+                  <input id="sunAxisTravelInput" data-stored="sunAxisTravel" type="number" min="2" max="30" step="1" style="width: 4em" />
+                  <input id="sunAxisTravelOutput" data-stored="sunAxisTravel" type="range" min="2" max="30" step="1" />
+                </label>
+              </div>
+              <div>
+                <label data-tip="Overall wetness of the world. Below 1 = drier (more desert), above 1 = wetter">
+                  <i>Wetness:</i>
+                  <input id="sunAxisWetnessInput" data-stored="sunAxisWetness" type="number" min="0.2" max="2" step="0.1" style="width: 4em" />
+                  <input id="sunAxisWetnessOutput" data-stored="sunAxisWetness" type="range" min="0.2" max="2" step="0.1" />
+                </label>
+              </div>
+            </div>
+            <div>
               <i data-locked="0" id="lock_temperatureEquator" class="icon-lock-open"></i>
               <label data-tip="Set temperature at equator">
                 <i>Equator:</i>

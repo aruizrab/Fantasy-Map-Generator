@@ -152,12 +152,77 @@ let options = {
   temperatureEquator: 27,
   temperatureNorthPole: -30,
   temperatureSouthPole: -15,
+  // Climate model selector: "classic" (upstream Earth-like) or "sunAxis" (spin axis points near the star).
+  // See SUN_AXIS_CLIMATE.md and getDefaultSunAxisConfig() for the physics and tunable coefficients.
+  climateModel: "classic",
+  sunAxis: getDefaultSunAxisConfig(),
   stateLabelsMode: "auto",
   showBurgPreview: true,
   burgs: {
     groups: JSON.safeParse(localStorage.getItem("burg-groups")) || Burgs.getDefaultGroups()
   }
 };
+
+// Single tunable coefficient block for the Sun-axis climate model (planet whose spin axis points
+// near its star). All "magic numbers" of the new physics live here so they can be tuned/persisted.
+// Stored on options.sunAxis so it round-trips through .map save/load automatically.
+function getDefaultSunAxisConfig() {
+  return {
+    // --- Geometry (user-facing) ---
+    // Axial tilt = angle (deg) between the spin axis and the planet->star line.
+    // tilt=0 => sun fixed over the sunward pole; larger tilt => sub-solar point further from the pole.
+    axialTilt: 18,
+    // Derived sub-solar latitude phi_s = 90 - axialTilt (only latitude where the sun reaches zenith).
+    // null => auto-derive from axialTilt; set a number to override.
+    subsolarLatitude: null,
+    // Which pole faces the star (the permanent-day cap). "north" => +90 lit, -90 dark.
+    sunwardPole: "north",
+    // Whether the day/night band actually rotates (cools each rotation). If false the band is treated
+    // as if frozen in place (no diurnal radiative cooling penalty).
+    rotationBand: true,
+
+    // --- Temperature model (T2) ---
+    // Target hottest sea-level temperature (deg C), reached near the integrated-warmth peak.
+    peakTemp: 32,
+    // Target sea-level temperature (deg C) of the permanent-night cap.
+    nightCapTemp: -55,
+    // Exponent shaping daily-mean insolation -> temperature (lower spreads warmth poleward).
+    insolationExponent: 0.5,
+    // Ocean thermal inertia: 0 = none, 1 = ocean fully relaxed toward the global mean temperature.
+    oceanThermalInertia: 0.35,
+    // Extra cooling (deg C) applied to day/night-band cells that radiate heat every rotation.
+    bandCoolingC: 8,
+    // Meridional heat transport (atmosphere/ocean carrying heat from the hot lit cap to the cold night
+    // cap): 0 = none (pure radiative, very cold dark side), 1 = strong mixing. Warms the dark side and
+    // flattens the gradient. Exposed in the UI as "Heat transport".
+    heatTransport: 0.4,
+
+    // --- Moisture / precipitation model (T3) ---
+    // Base evaporation rate from ocean cells (dimensionless source strength).
+    oceanEvaporation: 1.0,
+    // How strongly cell temperature boosts evaporation (per deg C above 0).
+    evaporationTempFactor: 0.03,
+    // Convergence/convective rainfall multiplier over the hot lit cap where ocean moisture is reachable.
+    convectionStrength: 1.6,
+    // Coriolis deflection of the surface winds (0 = winds blow straight toward the hot cap; 1 = strong
+    // rotation-induced sideways deflection, spiralling winds). Exposed in the UI as "Coriolis".
+    coriolis: 0.4,
+    // How strongly the prevailing wind steers moisture (0 = isotropic from nearest ocean; 1 = moisture
+    // only travels downwind, giving strong windward-wet / leeward-dry rain shadows).
+    windMoisture: 0.6,
+    // Dryness multiplier (0..1) for descending-air belts between the hot cap and the cold cap.
+    subsidenceDryness: 0.35,
+    // Orographic lift sensitivity to terrain height.
+    orographicFactor: 1.0,
+    // E-folding travel length (in cells, at the 10k-cell reference resolution) for ocean moisture
+    // advecting inland before it rains out. Smaller = sharper coast-to-interior drying (desert interiors).
+    // Exposed in the UI as "Moisture reach".
+    moistureTravel: 9,
+    // Global precipitation scale (on top of the precInput slider). <1 = drier world (more desert),
+    // >1 = wetter world. Exposed in the UI as "Wetness".
+    precipScale: 1.0
+  };
+}
 
 // global style object; in v2.0 to be used for all map styles and render settings
 let style = {burgLabels: {}, burgIcons: {}, anchors: {}};
@@ -924,8 +989,147 @@ function calculateMapCoordinates() {
 
 // temperature model, trying to follow real-world data
 // based on http://www-das.uwyo.edu/~geerts/cwx/notes/chap16/Image64.gif
+// Climate model dispatcher: routes to the upstream Earth-like model ("classic") or the
+// Sun-axis model (spin axis points near the star). Classic is the regression safety net and
+// is byte-for-behavior identical to upstream.
 function calculateTemperatures() {
   TIME && console.time("calculateTemperatures");
+  if (options.climateModel === "sunAxis") calculateTemperaturesSunAxis();
+  else calculateTemperaturesClassic();
+  TIME && console.timeEnd("calculateTemperatures");
+}
+
+// Resolve the effective sub-solar latitude phi_s (deg) and lit-pole sign from the Sun-axis config.
+// phi_s = 90 - axialTilt, mirrored to the dark hemisphere when the sunward pole is "south".
+function getSunAxisGeometry() {
+  const cfg = options.sunAxis || getDefaultSunAxisConfig();
+  const tilt = minmax(+cfg.axialTilt || 0, 0, 90);
+  const sign = cfg.sunwardPole === "south" ? -1 : 1;
+  const derived = 90 - tilt;
+  const subsolar = cfg.subsolarLatitude === null || cfg.subsolarLatitude === undefined ? derived : +cfg.subsolarLatitude;
+  return {cfg, tilt, sign, subsolarLatitude: sign * Math.abs(subsolar)};
+}
+
+// Sun-axis temperature model (T2). The spin axis points near the star, so the sub-solar latitude
+// phi_s (90 - tilt) behaves like an extreme solar "declination" near the pole. We integrate the
+// daily-mean insolation over one rotation per latitude (phi_s playing the declination role in the
+// standard insolation integral) and map it to an equilibrium sea-level temperature:
+//   - Permanent-day cap (poleward of +tilt on the sunward side): the sun never sets, so insolation
+//     accumulates with no night to radiate it away -> the *integrated-warmth* peak sits in the lit
+//     cap (toward the lit pole), NOT at the sub-solar latitude.
+//   - Sub-solar latitude phi_s: highest *instantaneous* (noon) sun -> strongest peak heating, but a
+//     lower integrated total than the cap. Both are modeled (and logged when DEBUG.temperature).
+//   - Day/night band (|phi| < tilt): cools every rotation -> an extra diurnal cooling penalty.
+//   - Permanent-night cap (poleward of -tilt): no sunlight -> floor temperature.
+// Altitude lapse and ocean thermal inertia are applied per cell. All coefficients live in options.sunAxis.
+function calculateTemperaturesSunAxis() {
+  const cells = grid.cells;
+  cells.temp = new Int8Array(cells.i.length);
+
+  const {cfg, subsolarLatitude: decl} = getSunAxisGeometry();
+  const exponent = +heightExponentInput.value;
+  const DEG = Math.PI / 180;
+  // clamp target temperatures to a sane range (defense-in-depth: keeps cell temps < 50°C so the
+  // downstream lake-evaporation denominator (80 - lakeTemp) can never reach/cross zero, matching
+  // Classic's UI cap; peakTemp/nightCapTemp are coefficients with no UI bound)
+  const peakTemp = minmax(+cfg.peakTemp || 0, -50, 50);
+  const nightCapTemp = minmax(+cfg.nightCapTemp || 0, -128, peakTemp);
+
+  // daily-mean insolation factor over one rotation, with phi_s as the solar declination.
+  // returns {H: mean insolation in [0,1], dayFraction: fraction of rotation the sun is up}
+  function insolation(latDeg) {
+    const phi = latDeg * DEG;
+    const d = decl * DEG;
+    const cosH0 = -Math.tan(phi) * Math.tan(d);
+    let h0;
+    if (cosH0 <= -1) h0 = Math.PI; // permanent day
+    else if (cosH0 >= 1) h0 = 0; // permanent night
+    else h0 = Math.acos(cosH0);
+    const H = (h0 * Math.sin(phi) * Math.sin(d) + Math.cos(phi) * Math.cos(d) * Math.sin(h0)) / Math.PI;
+    return {H: Math.max(0, H), dayFraction: h0 / Math.PI};
+  }
+
+  // deterministic global maximum insolation (sampled over the whole sphere, independent of map crop)
+  let Hmax = 0;
+  for (let l = -90; l <= 90; l += 0.5) Hmax = Math.max(Hmax, insolation(l).H);
+  if (!(Hmax > 0)) Hmax = 1; // degenerate guard (e.g. fully dark crop)
+
+  function seaLevelTemp(latDeg) {
+    const {H, dayFraction} = insolation(latDeg);
+    const shaped = Math.pow(H / Hmax, cfg.insolationExponent);
+    let t = nightCapTemp + (peakTemp - nightCapTemp) * shaped;
+    // diurnal cooling for the rotating day/night band (max where the cell is lit ~half the rotation)
+    if (cfg.rotationBand) t -= cfg.bandCoolingC * 4 * (1 - dayFraction) * dayFraction;
+    return t;
+  }
+
+  // temperature drops by 6.5°C per 1km of altitude (same lapse model as Classic)
+  function getAltitudeTemperatureDrop(h) {
+    if (h < 20) return 0;
+    const height = Math.pow(h - 18, exponent);
+    return rn((height / 1000) * 6.5);
+  }
+
+  // precompute per-row sea-level temperature and a global mean for ocean thermal inertia
+  const rowCount = Math.ceil(cells.i.length / grid.cellsX);
+  const rowTemp = new Float64Array(rowCount);
+  for (let r = 0, rowCellId = 0; rowCellId < cells.i.length; r++, rowCellId += grid.cellsX) {
+    const [, y] = grid.points[rowCellId];
+    const lat = mapCoordinates.latN - (y / graphHeight) * mapCoordinates.latT; // [90; -90]
+    rowTemp[r] = seaLevelTemp(lat);
+  }
+
+  // Meridional heat transport: a real atmosphere/ocean advects heat from the hot lit cap toward the
+  // cold night cap, warming the dark side and flattening the gradient (radiative equilibrium alone is
+  // far too extreme). Modeled as meridional diffusion of the latitude temperature profile; strength is
+  // the tunable `heatTransport` coefficient (0 = none/pure radiative, 1 = strong mixing).
+  const heatTransport = minmax(cfg.heatTransport ?? 0, 0, 1);
+  if (heatTransport > 0 && rowCount > 2) {
+    const iterations = Math.round(heatTransport * rowCount * rowCount * 0.15);
+    const k = 0.5;
+    let a = rowTemp;
+    let b = new Float64Array(rowCount);
+    for (let it = 0; it < iterations; it++) {
+      for (let r = 0; r < rowCount; r++) {
+        const lo = a[r === 0 ? 0 : r - 1];
+        const hi = a[r === rowCount - 1 ? rowCount - 1 : r + 1];
+        b[r] = a[r] + k * (lo + hi - 2 * a[r]);
+      }
+      const tmp = a; a = b; b = tmp;
+    }
+    if (a !== rowTemp) rowTemp.set(a);
+  }
+
+  let meanSeaTemp = 0;
+  for (let r = 0; r < rowCount; r++) meanSeaTemp += rowTemp[r];
+  meanSeaTemp /= rowCount;
+
+  const inertia = minmax(cfg.oceanThermalInertia, 0, 1);
+  for (let r = 0, rowCellId = 0; rowCellId < cells.i.length; r++, rowCellId += grid.cellsX) {
+    const tSea = rowTemp[r];
+    for (let cellId = rowCellId; cellId < rowCellId + grid.cellsX && cellId < cells.i.length; cellId++) {
+      const h = cells.h[cellId];
+      const t = h < 20
+        ? tSea + (meanSeaTemp - tSea) * inertia // oceans relax toward the global mean (thermal inertia)
+        : tSea - getAltitudeTemperatureDrop(h); // land cools with altitude
+      cells.temp[cellId] = minmax(Math.round(t), -128, 127);
+    }
+  }
+
+  if (DEBUG.temperature) {
+    // report both peaks to confirm they are modeled and do not coincide
+    let peakMeanLat = 0, peakMean = -Infinity, peakNoonLat = 0, peakNoon = -1;
+    for (let lat = 90; lat >= -90; lat -= 0.5) {
+      const t = seaLevelTemp(lat);
+      const noon = Math.max(0, Math.cos((lat - decl) * DEG)); // instantaneous noon insolation
+      if (t > peakMean) {peakMean = t; peakMeanLat = lat;}
+      if (noon > peakNoon) {peakNoon = noon; peakNoonLat = lat;}
+    }
+    console.info(`Sun-axis: subsolar=${rn(decl)}°  integrated-warmth peak @ ${rn(peakMeanLat)}° (${rn(peakMean)}°C)  instantaneous-noon peak @ ${rn(peakNoonLat)}°`);
+  }
+}
+
+function calculateTemperaturesClassic() {
   const cells = grid.cells;
   cells.temp = new Int8Array(cells.i.length); // temperature array
 
@@ -968,12 +1172,209 @@ function calculateTemperatures() {
     const height = Math.pow(h - 18, exponent);
     return rn((height / 1000) * 6.5);
   }
-
-  TIME && console.timeEnd("calculateTemperatures");
 }
 
 // simplest precipitation model
 function generatePrecipitation() {
+  if (options.climateModel === "sunAxis") return generatePrecipitationSunAxis();
+  return generatePrecipitationClassic();
+}
+
+// Sun-axis moisture & precipitation model (T3). Permanent heating over the lit cap drives
+// convection/convergence; moist air is drawn in from the oceans and rises over the hot cap,
+// producing a standing rain belt where ocean moisture is reachable (coasts/ocean-adjacent lit land).
+// Moisture rains out as it travels inland — and rains out FASTER over the hot, convective cap — so
+// the baked continental interior starves into desert. Descending-air belts between the hot cap and
+// the cold cap are dry; the permanent-night cap is cold/frozen and dry. Orographic lift adds rain
+// where moist air climbs terrain. All coefficients live in options.sunAxis; the global precInput
+// slider still scales output. Output -> grid.cells.prec (Uint8Array).
+function generatePrecipitationSunAxis() {
+  TIME && console.time("generatePrecipitation");
+  prec.selectAll("*").remove();
+  const {cells, cellsX} = grid;
+  const n = cells.i.length;
+  cells.prec = new Uint8Array(n);
+
+  const {cfg} = getSunAxisGeometry();
+  const temp = cells.temp;
+  const h = cells.h;
+  const neighbors = cells.c;
+
+  const FREEZE = 0; // °C below which convective uplift (and rainfall) is suppressed
+  // use the same clamped peak as the temperature model so warmth normalization matches the temp ceiling
+  const tempSpan = Math.max(1, minmax(+cfg.peakTemp || 0, -50, 50) - FREEZE);
+  // resolution-aware: denser grids have more cells per physical distance, so moisture travels more
+  // cells to cover the same ground (same idea as Classic's cellsNumberModifier)
+  // moisture travels more cells on denser grids to cover the same physical distance: cells-per-
+  // distance scales ~ sqrt(cell count), so the e-folding travel length scales the same way.
+  const resolutionScale = (pointsInput.dataset.cells / 10000) ** 0.5;
+  const travel = Math.max(1, cfg.moistureTravel * resolutionScale);
+  const precInputModifier = precInput.value / 100;
+  // base magnitude tuned so the wettest coasts land in the forest/rainforest range and the wetland
+  // biome stays rare; the warm lit cap then spans desert -> grassland -> forest instead of all-wetland
+  const outputScale = 35 * precInputModifier * cfg.precipScale;
+
+  // convective uplift potential of a cell, 0 (frozen) .. ~1 (peak warmth over the lit cap)
+  const warmth = i => Math.max(0, Math.min(1, (temp[i] - FREEZE) / tempSpan));
+
+  // --- thermal-circulation surface wind field ---
+  // Surface winds blow from the cold caps (high pressure) toward the hot lit cap (low pressure), i.e.
+  // up the LARGE-SCALE temperature gradient, deflected sideways by the planet's rotation (Coriolis).
+  // The temperature is smoothed first so the wind reflects the planetary circulation rather than local
+  // mountain cooling. The wind then steers where ocean moisture goes (downwind) and which slopes get
+  // orographic rain (windward) vs rain shadow (leeward).
+  const points = grid.points;
+  const coriolis = minmax(cfg.coriolis ?? 0, 0, 1);
+  const windMoisture = minmax(cfg.windMoisture ?? 0, 0, 1);
+  let tSmooth = new Float64Array(temp);
+  for (let pass = 0; pass < 3; pass++) {
+    const srcT = tSmooth.slice();
+    for (let i = 0; i < n; i++) {
+      let s = srcT[i], c = 1;
+      for (const nb of neighbors[i]) {s += srcT[nb]; c++;}
+      tSmooth[i] = s / c;
+    }
+  }
+  const windX = new Float64Array(n), windY = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const xi = points[i][0], yi = points[i][1];
+    let gx = 0, gy = 0;
+    for (const nb of neighbors[i]) {
+      const dx = points[nb][0] - xi, dy = points[nb][1] - yi;
+      const d2 = dx * dx + dy * dy || 1;
+      const dt = tSmooth[nb] - tSmooth[i]; // warmer neighbour -> wind points toward it (toward the hot cap)
+      gx += (dt * dx) / d2;
+      gy += (dt * dy) / d2;
+    }
+    // Coriolis: deflect the toward-warm vector sideways, sign by hemisphere (screen y runs south-down)
+    const lat = mapCoordinates.latN - (yi / graphHeight) * mapCoordinates.latT;
+    const theta = coriolis * (Math.PI / 3) * (lat >= 0 ? 1 : -1);
+    const cs = Math.cos(theta), sn = Math.sin(theta);
+    const wx = gx * cs - gy * sn, wy = gx * sn + gy * cs;
+    const m = Math.hypot(wx, wy) || 1;
+    windX[i] = wx / m;
+    windY[i] = wy / m;
+  }
+
+  // 1) moisture "optical depth" from the oceans via Dijkstra (binary min-heap). Each inland step
+  //    costs 1 + convectionStrength * warmth: moist air rains out faster over the hot convective cap,
+  //    so the cost climbs quickly across baked lit-cap interiors. The cost is also DIRECTIONAL: moving
+  //    downwind is cheap (the wind carries moisture there) and moving upwind is expensive, so windward
+  //    coasts are wet and leeward interiors fall into rain shadow.
+  const dist = new Float64Array(n).fill(Infinity);
+  const heap = []; // array of cell ids, ordered by dist via siftUp/siftDown
+  const hpush = id => {
+    heap.push(id);
+    let c = heap.length - 1;
+    while (c > 0) {
+      const p = (c - 1) >> 1;
+      if (dist[heap[p]] <= dist[heap[c]]) break;
+      [heap[p], heap[c]] = [heap[c], heap[p]];
+      c = p;
+    }
+  };
+  const hpop = () => {
+    const top = heap[0];
+    const last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      let p = 0;
+      for (;;) {
+        const l = 2 * p + 1, r = l + 1;
+        let s = p;
+        if (l < heap.length && dist[heap[l]] < dist[heap[s]]) s = l;
+        if (r < heap.length && dist[heap[r]] < dist[heap[s]]) s = r;
+        if (s === p) break;
+        [heap[s], heap[p]] = [heap[p], heap[s]];
+        p = s;
+      }
+    }
+    return top;
+  };
+  for (let i = 0; i < n; i++) if (h[i] < 20) {dist[i] = 0; hpush(i);}
+  while (heap.length) {
+    const i = hpop();
+    const di = dist[i];
+    const xi = points[i][0], yi = points[i][1];
+    for (const nb of neighbors[i]) {
+      if (h[nb] < 20) continue; // moisture paths run over land; oceans are the dist-0 sources
+      const dx = points[nb][0] - xi, dy = points[nb][1] - yi;
+      const dl = Math.hypot(dx, dy) || 1;
+      const align = (dx * windX[i] + dy * windY[i]) / dl; // +1 downwind, -1 upwind
+      const dirFactor = Math.max(0.35, 1 - windMoisture * align); // downwind cheap, upwind costly
+      const stepCost = (1 + cfg.convectionStrength * warmth(nb)) * dirFactor;
+      const nd = di + stepCost;
+      if (nd < dist[nb]) {dist[nb] = nd; hpush(nb);}
+    }
+  }
+
+  // 2) descending-air dry belt: subsidence equatorward of the lit-cap convergence (subtropics-like).
+  const sign = cfg.sunwardPole === "south" ? -1 : 1;
+  const beltCenter = sign * Math.max(0, +cfg.axialTilt - 25);
+  const beltWidth = 22;
+  const subsidence = lat => cfg.subsidenceDryness * Math.exp(-(((lat - beltCenter) / beltWidth) ** 2));
+
+  // 3) per-cell precipitation
+  let totalLit = 0, totalAll = 0;
+  for (let rowCellId = 0; rowCellId < n; rowCellId += cellsX) {
+    const [, y] = grid.points[rowCellId];
+    const lat = mapCoordinates.latN - (y / graphHeight) * mapCoordinates.latT;
+    const dry = 1 - subsidence(lat);
+    for (let i = rowCellId; i < rowCellId + cellsX && i < n; i++) {
+      if (h[i] < 20) continue; // water cells handled by the engine separately
+      const reach = Math.exp(-dist[i] / travel); // ocean moisture availability after rainout
+      // orographic lift: moist air forced UPHILL on the windward slope rains out; the leeward slope sits
+      // in rain shadow. We measure the climb from the upwind neighbour (where the wind blows FROM).
+      // Gated by warmth so the cold/frozen night cap stays dry (cold air holds negligible water vapor).
+      const w = warmth(i);
+      const xi = points[i][0], yi = points[i][1];
+      let climb = 0;
+      for (const nb of neighbors[i]) {
+        const dx = points[nb][0] - xi, dy = points[nb][1] - yi;
+        const dl = Math.hypot(dx, dy) || 1;
+        const upwind = -(dx * windX[i] + dy * windY[i]) / dl; // neighbour is upwind when this > 0
+        if (upwind > 0 && h[nb] < h[i]) climb = Math.max(climb, (h[i] - h[nb]) * upwind);
+      }
+      const oro = ((cfg.orographicFactor * climb) / 20) * w;
+      const p = outputScale * reach * (cfg.convectionStrength * w + oro) * dry;
+      cells.prec[i] = minmax(Math.round(p), 0, 255);
+      totalAll += cells.prec[i];
+      if (w > 0.6) totalLit += cells.prec[i];
+    }
+  }
+
+  // wind direction arrows (coarse sample of the surface wind field), drawn in the precipitation layer
+  void (function drawWindField() {
+    const windG = prec
+      .append("g")
+      .attr("id", "wind")
+      .attr("stroke", "#3b6ea5")
+      .attr("stroke-width", 0.7)
+      .attr("fill", "none")
+      .attr("opacity", 0.65);
+    const stride = Math.max(1, Math.floor(n / 240));
+    const L = (grid.spacing || 12) * 0.9;
+    let d = "";
+    for (let i = 0; i < n; i += stride) {
+      const x = points[i][0], y = points[i][1];
+      const ex = x + windX[i] * L, ey = y + windY[i] * L;
+      const ang = Math.atan2(ey - y, ex - x);
+      const hl = L * 0.35;
+      const a1 = ang + Math.PI * 0.82, a2 = ang - Math.PI * 0.82;
+      d += `M${rn(x, 1)},${rn(y, 1)}L${rn(ex, 1)},${rn(ey, 1)}`;
+      d += `M${rn(ex, 1)},${rn(ey, 1)}L${rn(ex + Math.cos(a1) * hl, 1)},${rn(ey + Math.sin(a1) * hl, 1)}`;
+      d += `M${rn(ex, 1)},${rn(ey, 1)}L${rn(ex + Math.cos(a2) * hl, 1)},${rn(ey + Math.sin(a2) * hl, 1)}`;
+    }
+    windG.append("path").attr("d", d);
+  })();
+
+  DEBUG.precipitation &&
+    console.info(`Sun-axis precipitation: total=${totalAll}, lit-cap total=${totalLit}, travel=${rn(travel, 1)} cells`);
+
+  TIME && console.timeEnd("generatePrecipitation");
+}
+
+function generatePrecipitationClassic() {
   TIME && console.time("generatePrecipitation");
   prec.selectAll("*").remove();
   const {cells, cellsX, cellsY} = grid;
