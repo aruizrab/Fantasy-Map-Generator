@@ -49,12 +49,12 @@ verbatim in `ARCHITECTURE.md` for diff reference.
 | T0 | Architecture map, pin commit, baseline | — | PASS |
 | T1 | Planetary config + UI + save/load + Classic toggle | T0 | PASS |
 | T2 | Insolation & temperature model | T1 | PASS |
-| T3 | Moisture circulation & precipitation model | T2 | IMPL DONE (re-evaluating, cycle 2) |
-| T4 | Biome cascade verification / retune | T3 | IMPL DONE (validated) |
+| T3 | Moisture circulation & precipitation model | T2 | PASS (cycle 2) |
+| T4 | Biome cascade verification / retune | T3 | PASS |
 | T5 | River & lake cascade verification | T3 | PASS |
-| T6 | Population/burg/location cascade verification | T4 | BLOCKED |
-| T7 | End-to-end integration + regression | T4,T5,T6 | BLOCKED |
-| T8 | Documentation & handoff | T7 | BLOCKED |
+| T6 | Population/burg/location cascade verification | T4 | PASS |
+| T7 | End-to-end integration + regression | T4,T5,T6 | PASS |
+| T8 | Documentation & handoff | T7 | IN PROGRESS |
 
 Status legend: BLOCKED → IN PROGRESS → IMPL DONE → PASS / FAIL (evaluator-gated).
 
@@ -88,6 +88,24 @@ Status legend: BLOCKED → IN PROGRESS → IMPL DONE → PASS / FAIL (evaluator-
   re-derive cleanly; rivers nucleate in the rain belt, hot-cap lakes trend evaporative; no NaN/Inf.
   Applied its defense-in-depth suggestion: clamp peakTemp to [-50,50] (and nightCapTemp ≤ peakTemp) so
   the lake-evaporation denominator (80 − lakeTemp) can never reach zero even via console/save-file edits.
+- 2026-06-03: T3 PASS cycle-2 (independent evaluator): night-cap mountain prec 35→0 fixed,
+  orographic lift preserved on warm terrain, all 6 criteria green, Classic byte-identical.
+- 2026-06-03: T4 PASS (independent evaluator): biomes.ts byte-identical to fa5016a (NO matrix
+  retune), lit coast→Wetland/lush, lit interior→Hot desert, night cap→Glacier, exhaustive
+  256-temp × moisture sweep produced 0 unclassified/out-of-range. Two-tool discrepancy resolved.
+- 2026-06-03: T6 + T7 PASS via a REAL Playwright e2e test (tests/e2e/sun-axis-climate.spec.ts)
+  driving the actual app in chromium:
+  (1) Classic mode still generates a complete map (regression baseline) — no console errors.
+  (2) Sun-axis whole-world map: clean end-to-end run (climate→biomes→rivers→burgs→states),
+      temp signature maxTemp ~14-28 / minTemp ~-53..-86, 9-10 distinct biomes incl. cold + lush,
+      no NaN, no console errors. T6: population concentrates in habitable zones (≈4880 habitable
+      vs ≈444 hostile pop). (hot-desert presence varies with the random heightmap and is proven
+      deterministically by the T4 cascade harness; e2e asserts robust properties only.)
+  (3) A Sun-axis world round-trips through the real .map save/load (climateModel, axialTilt,
+      sunwardPole, moistureTravel and grid.cells.temp all preserved).
+  Note: locally the env's chromium build (1194) differs from playwright 1.60's expected build;
+  the committed spec runs against the standard playwright.config.ts (CI installs the matching
+  browser). A throwaway executablePath-override config was used locally only and not committed.
 - 2026-06-03: T2 implemented. Sun-axis temperature uses the standard daily-mean insolation integral
   with phi_s (=90−tilt) as solar "declination". Validated by prototype + integration harness against
   a synthetic grid: lit cap warmest (integrated-warmth peak toward lit pole), instantaneous-noon peak
