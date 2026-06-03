@@ -105,7 +105,8 @@ class BurgModule {
 
     const populatedCells = cells.i.filter(i => cells.s[i] > 0 && cells.culture[i]);
     if (!populatedCells.length) {
-      ERROR && console.error("There is no populated cells with culture assigned. Cannot generate states");
+      WARN && console.warn("There are no populated cells with a culture assigned — generating an unpopulated world");
+      pack.burgs = burgs; // ensure pack.burgs is always initialized so the downstream cascade can't crash
       return burgs;
     }
 

@@ -204,6 +204,12 @@ function getDefaultSunAxisConfig() {
     evaporationTempFactor: 0.03,
     // Convergence/convective rainfall multiplier over the hot lit cap where ocean moisture is reachable.
     convectionStrength: 1.6,
+    // Coriolis deflection of the surface winds (0 = winds blow straight toward the hot cap; 1 = strong
+    // rotation-induced sideways deflection, spiralling winds). Exposed in the UI as "Coriolis".
+    coriolis: 0.4,
+    // How strongly the prevailing wind steers moisture (0 = isotropic from nearest ocean; 1 = moisture
+    // only travels downwind, giving strong windward-wet / leeward-dry rain shadows).
+    windMoisture: 0.6,
     // Dryness multiplier (0..1) for descending-air belts between the hot cap and the cold cap.
     subsidenceDryness: 0.35,
     // Orographic lift sensitivity to terrain height.
@@ -1211,9 +1217,50 @@ function generatePrecipitationSunAxis() {
   // convective uplift potential of a cell, 0 (frozen) .. ~1 (peak warmth over the lit cap)
   const warmth = i => Math.max(0, Math.min(1, (temp[i] - FREEZE) / tempSpan));
 
+  // --- thermal-circulation surface wind field ---
+  // Surface winds blow from the cold caps (high pressure) toward the hot lit cap (low pressure), i.e.
+  // up the LARGE-SCALE temperature gradient, deflected sideways by the planet's rotation (Coriolis).
+  // The temperature is smoothed first so the wind reflects the planetary circulation rather than local
+  // mountain cooling. The wind then steers where ocean moisture goes (downwind) and which slopes get
+  // orographic rain (windward) vs rain shadow (leeward).
+  const points = grid.points;
+  const coriolis = minmax(cfg.coriolis ?? 0, 0, 1);
+  const windMoisture = minmax(cfg.windMoisture ?? 0, 0, 1);
+  let tSmooth = new Float64Array(temp);
+  for (let pass = 0; pass < 3; pass++) {
+    const srcT = tSmooth.slice();
+    for (let i = 0; i < n; i++) {
+      let s = srcT[i], c = 1;
+      for (const nb of neighbors[i]) {s += srcT[nb]; c++;}
+      tSmooth[i] = s / c;
+    }
+  }
+  const windX = new Float64Array(n), windY = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const xi = points[i][0], yi = points[i][1];
+    let gx = 0, gy = 0;
+    for (const nb of neighbors[i]) {
+      const dx = points[nb][0] - xi, dy = points[nb][1] - yi;
+      const d2 = dx * dx + dy * dy || 1;
+      const dt = tSmooth[nb] - tSmooth[i]; // warmer neighbour -> wind points toward it (toward the hot cap)
+      gx += (dt * dx) / d2;
+      gy += (dt * dy) / d2;
+    }
+    // Coriolis: deflect the toward-warm vector sideways, sign by hemisphere (screen y runs south-down)
+    const lat = mapCoordinates.latN - (yi / graphHeight) * mapCoordinates.latT;
+    const theta = coriolis * (Math.PI / 3) * (lat >= 0 ? 1 : -1);
+    const cs = Math.cos(theta), sn = Math.sin(theta);
+    const wx = gx * cs - gy * sn, wy = gx * sn + gy * cs;
+    const m = Math.hypot(wx, wy) || 1;
+    windX[i] = wx / m;
+    windY[i] = wy / m;
+  }
+
   // 1) moisture "optical depth" from the oceans via Dijkstra (binary min-heap). Each inland step
   //    costs 1 + convectionStrength * warmth: moist air rains out faster over the hot convective cap,
-  //    so the cost (and therefore dryness) climbs quickly across baked lit-cap interiors.
+  //    so the cost climbs quickly across baked lit-cap interiors. The cost is also DIRECTIONAL: moving
+  //    downwind is cheap (the wind carries moisture there) and moving upwind is expensive, so windward
+  //    coasts are wet and leeward interiors fall into rain shadow.
   const dist = new Float64Array(n).fill(Infinity);
   const heap = []; // array of cell ids, ordered by dist via siftUp/siftDown
   const hpush = id => {
@@ -1248,9 +1295,14 @@ function generatePrecipitationSunAxis() {
   while (heap.length) {
     const i = hpop();
     const di = dist[i];
+    const xi = points[i][0], yi = points[i][1];
     for (const nb of neighbors[i]) {
       if (h[nb] < 20) continue; // moisture paths run over land; oceans are the dist-0 sources
-      const stepCost = 1 + cfg.convectionStrength * warmth(nb); // faster rainout where hotter
+      const dx = points[nb][0] - xi, dy = points[nb][1] - yi;
+      const dl = Math.hypot(dx, dy) || 1;
+      const align = (dx * windX[i] + dy * windY[i]) / dl; // +1 downwind, -1 upwind
+      const dirFactor = Math.max(0.35, 1 - windMoisture * align); // downwind cheap, upwind costly
+      const stepCost = (1 + cfg.convectionStrength * warmth(nb)) * dirFactor;
       const nd = di + stepCost;
       if (nd < dist[nb]) {dist[nb] = nd; hpush(nb);}
     }
@@ -1271,19 +1323,50 @@ function generatePrecipitationSunAxis() {
     for (let i = rowCellId; i < rowCellId + cellsX && i < n; i++) {
       if (h[i] < 20) continue; // water cells handled by the engine separately
       const reach = Math.exp(-dist[i] / travel); // ocean moisture availability after rainout
-      // orographic lift: moist air climbing terrain from the ocean-ward (lower optical-depth) neighbour.
-      // Gated by warmth so the cold/frozen night cap stays dry (cold air holds negligible water vapor) —
-      // without this gate, frozen night-cap mountains would still "rain" from pure orographic lift.
+      // orographic lift: moist air forced UPHILL on the windward slope rains out; the leeward slope sits
+      // in rain shadow. We measure the climb from the upwind neighbour (where the wind blows FROM).
+      // Gated by warmth so the cold/frozen night cap stays dry (cold air holds negligible water vapor).
       const w = warmth(i);
-      let upwindH = h[i];
-      for (const nb of neighbors[i]) if (dist[nb] < dist[i] && h[nb] < upwindH) upwindH = h[nb];
-      const oro = ((cfg.orographicFactor * Math.max(0, h[i] - upwindH)) / 20) * w;
+      const xi = points[i][0], yi = points[i][1];
+      let climb = 0;
+      for (const nb of neighbors[i]) {
+        const dx = points[nb][0] - xi, dy = points[nb][1] - yi;
+        const dl = Math.hypot(dx, dy) || 1;
+        const upwind = -(dx * windX[i] + dy * windY[i]) / dl; // neighbour is upwind when this > 0
+        if (upwind > 0 && h[nb] < h[i]) climb = Math.max(climb, (h[i] - h[nb]) * upwind);
+      }
+      const oro = ((cfg.orographicFactor * climb) / 20) * w;
       const p = outputScale * reach * (cfg.convectionStrength * w + oro) * dry;
       cells.prec[i] = minmax(Math.round(p), 0, 255);
       totalAll += cells.prec[i];
       if (w > 0.6) totalLit += cells.prec[i];
     }
   }
+
+  // wind direction arrows (coarse sample of the surface wind field), drawn in the precipitation layer
+  void (function drawWindField() {
+    const windG = prec
+      .append("g")
+      .attr("id", "wind")
+      .attr("stroke", "#3b6ea5")
+      .attr("stroke-width", 0.7)
+      .attr("fill", "none")
+      .attr("opacity", 0.65);
+    const stride = Math.max(1, Math.floor(n / 240));
+    const L = (grid.spacing || 12) * 0.9;
+    let d = "";
+    for (let i = 0; i < n; i += stride) {
+      const x = points[i][0], y = points[i][1];
+      const ex = x + windX[i] * L, ey = y + windY[i] * L;
+      const ang = Math.atan2(ey - y, ex - x);
+      const hl = L * 0.35;
+      const a1 = ang + Math.PI * 0.82, a2 = ang - Math.PI * 0.82;
+      d += `M${rn(x, 1)},${rn(y, 1)}L${rn(ex, 1)},${rn(ey, 1)}`;
+      d += `M${rn(ex, 1)},${rn(ey, 1)}L${rn(ex + Math.cos(a1) * hl, 1)},${rn(ey + Math.sin(a1) * hl, 1)}`;
+      d += `M${rn(ex, 1)},${rn(ey, 1)}L${rn(ex + Math.cos(a2) * hl, 1)},${rn(ey + Math.sin(a2) * hl, 1)}`;
+    }
+    windG.append("path").attr("d", d);
+  })();
 
   DEBUG.precipitation &&
     console.info(`Sun-axis precipitation: total=${totalAll}, lit-cap total=${totalLit}, travel=${rn(travel, 1)} cells`);

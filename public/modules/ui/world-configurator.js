@@ -64,6 +64,7 @@ function editWorld() {
     ensureEl("sunAxisPoleInput").value = sa.sunwardPole || "north";
     ensureEl("sunAxisRotationInput").checked = sa.rotationBand !== false;
     ensureEl("sunAxisHeatInput").value = ensureEl("sunAxisHeatOutput").value = sa.heatTransport;
+    ensureEl("sunAxisCoriolisInput").value = ensureEl("sunAxisCoriolisOutput").value = sa.coriolis;
     ensureEl("sunAxisTravelInput").value = ensureEl("sunAxisTravelOutput").value = sa.moistureTravel;
     ensureEl("sunAxisWetnessInput").value = ensureEl("sunAxisWetnessOutput").value = sa.precipScale;
     updateClimateModelVisibility();
@@ -108,6 +109,13 @@ function editWorld() {
       ensureEl("sunAxisHeatInput").value = target.value;
       ensureEl("sunAxisHeatOutput").value = target.value;
       options.sunAxis.heatTransport = minmax(Number(target.value), 0, 1);
+      if (ensureEl("wcAutoChange").checked) updateWorld();
+      return;
+    }
+    if (stored === "sunAxisCoriolis") {
+      ensureEl("sunAxisCoriolisInput").value = target.value;
+      ensureEl("sunAxisCoriolisOutput").value = target.value;
+      options.sunAxis.coriolis = minmax(Number(target.value), 0, 1);
       if (ensureEl("wcAutoChange").checked) updateWorld();
       return;
     }

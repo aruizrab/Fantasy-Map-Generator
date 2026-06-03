@@ -83,7 +83,11 @@ Per grid cell at latitude φ:
 2. **Sea-level temperature:** `T = nightCapTemp + (peakTemp − nightCapTemp) · (H/Hmax)^insolationExponent`.
 3. **Diurnal band cooling:** rotating day/night-band cells radiate heat each rotation, so subtract
    `bandCoolingC · 4 · (1 − dayFraction) · dayFraction` (maximal where a cell is lit ~half the rotation).
-4. **Per cell:** ocean cells relax toward the global mean by `oceanThermalInertia` (thermal inertia);
+4. **Meridional heat transport:** the latitude temperature profile is diffused so heat flows from the
+   hot lit cap to the cold night cap — a real atmosphere/ocean carries heat to the dark side, warming
+   it and flattening the gradient (pure radiative equilibrium is far too extreme). Strength = the
+   tunable `heatTransport` coefficient.
+5. **Per cell:** ocean cells relax toward the global mean by `oceanThermalInertia` (thermal inertia);
    land cells get the 6.5 °C/km **altitude lapse**. Output clamped to Int8 [−128, 127].
 
 `peakTemp` is clamped to [−50, 50] °C internally so downstream formulas (e.g. lake evaporation,
@@ -91,21 +95,26 @@ whose denominator is `80 − lakeTemp`) can never blow up.
 
 ---
 
-## 4. The precipitation model (`generatePrecipitationSunAxis`)
+## 4. The wind & precipitation model (`generatePrecipitationSunAxis`)
 
+0. **Thermal-circulation surface winds.** Hot = low pressure, cold = high pressure, so surface winds
+   blow from the cold caps *toward the hot lit cap* — i.e. up the large-scale (smoothed) temperature
+   gradient — deflected sideways by the planet's rotation (**Coriolis**). This wind field steers the
+   moisture and is drawn as arrows in the precipitation layer.
 1. **Moisture optical depth from oceans** — a heap Dijkstra from all ocean cells (sources). Each
-   inland step costs `1 + convectionStrength · warmth(cell)`, where `warmth ∈ [0,1]` is the cell's
-   convective potential (0 at/below 0 °C, ~1 over the hot cap). Moist air rains out faster over the
-   hot convective cap, so optical depth climbs quickly across baked interiors. Ocean-moisture
+   inland step costs `(1 + convectionStrength · warmth(cell)) · directionFactor`, where `warmth ∈ [0,1]`
+   is the cell's convective potential (0 at/below 0 °C) and `directionFactor` makes moving **downwind
+   cheap and upwind costly** (`windMoisture`). So moist air rains out fast over the hot cap *and*
+   windward coasts are wet while leeward interiors fall into **rain shadow**. Ocean-moisture
    availability `reach = exp(−opticalDepth / travel)`.
 2. **Convective/convergence rainfall** `= convectionStrength · warmth` (peaks over the lit cap;
    ~0 in the frozen night cap).
-3. **Orographic lift** where moist air climbs terrain from its ocean-ward (lower optical-depth)
-   neighbour — **gated by warmth** so frozen night-cap mountains stay dry.
+3. **Orographic lift** on the **windward** slope (moist air forced uphill from the upwind neighbour),
+   **gated by warmth**; the leeward slope sits in rain shadow.
 4. **Subsidence dry belt** — a Gaussian dryness multiplier for descending air equatorward of the
    convergence (subtropics-like).
 5. **Per cell:** `prec = outputScale · reach · (convective + orographic) · (1 − subsidence)`, where
-   `outputScale = 50 · (precInput/100) · precipScale`. Clamped to Uint8 [0, 255].
+   `outputScale = 35 · (precInput/100) · precipScale`. Clamped to Uint8 [0, 255].
 
 `travel` scales with grid resolution as `moistureTravel · sqrt(cells / 10000)` so physical reach is
 resolution-independent. The existing global precipitation slider (`precInput`) still applies.
@@ -137,11 +146,14 @@ block `options.sunAxis` (defaults from `getDefaultSunAxisConfig()` in `public/ma
 | `insolationExponent` | 0.5 | Shapes insolation→temperature. Lower spreads warmth poleward (flatter); higher concentrates it. |
 | `oceanThermalInertia` | 0.35 | 0 = none; 1 = oceans fully relaxed to the global mean (moderates coastal extremes). |
 | `bandCoolingC` | 8 °C | Extra diurnal cooling for the rotating day/night band. |
+| `heatTransport` (Heat transport) | 0.4 | Heat carried from the hot lit cap to the cold dark cap (winds/currents). 0 = pure radiative (frozen dark side, steep gradient); 1 = strong mixing (warm dark side, gentle gradient). UI-exposed. |
 
 ### Moisture coefficients
 | Coefficient | Default | Effect |
 |-------------|---------|--------|
 | `convectionStrength` | 1.6 | Convergence/convective rainfall over the hot cap **and** inland rainout rate (coupled). Higher = wetter coasts, sharper desert interiors. |
+| `coriolis` (Coriolis) | 0.4 | Sideways deflection of the prevailing winds from the planet's spin. 0 = winds blow straight at the hot cap; higher = spiralling winds, rain belts/shadows shifted sideways. UI-exposed. |
+| `windMoisture` | 0.6 | How strongly the wind steers moisture. 0 = isotropic from nearest ocean; 1 = moisture only travels downwind (strong windward-wet / leeward-dry rain shadows). |
 | `moistureTravel` (Moisture reach) | 9 | E-folding inland travel length (cells @ 10k-cell reference). Smaller = sharper coast→interior drying (more desert). UI-exposed. |
 | `orographicFactor` | 1.0 | Strength of orographic (terrain-lift) rainfall. |
 | `subsidenceDryness` | 0.35 | Dryness of the descending subtropical-like belt (0..1). |

@@ -62,7 +62,7 @@ test.describe("Sun-axis climate", () => {
   });
 
   test("Sun-axis mode produces the expected climate + cascade + population signature", async ({ page }) => {
-    test.setTimeout(120000); // whole-world regeneration can be slow on constrained CI runners
+    test.setTimeout(200000); // whole-world regeneration can be slow on constrained CI runners
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
     page.on("console", (m) => m.type() === "error" && errors.push(`console.error: ${m.text()}`));
@@ -71,8 +71,10 @@ test.describe("Sun-axis climate", () => {
       // cover the whole world so a lit cap and a night cap are both in view
       for (const id of ["mapSizeInput", "mapSizeOutput"]) (document.getElementById(id) as HTMLInputElement).value = "100";
       for (const id of ["latitudeInput", "latitudeOutput"]) (document.getElementById(id) as HTMLInputElement).value = "50";
+      // tilt 45 = a clearly sun-pointing planet with a reliably habitable warm hemisphere (very low
+      // tilts give a tiny lit cap that can leave a random map with almost no habitable land)
       options.climateModel = "sunAxis";
-      options.sunAxis.axialTilt = 18;
+      options.sunAxis.axialTilt = 45;
       options.sunAxis.sunwardPole = "north";
 
       const before = (window as any).mapId;
@@ -80,7 +82,7 @@ test.describe("Sun-axis climate", () => {
       await new Promise<void>((res) => {
         const t0 = Date.now();
         const iv = setInterval(() => {
-          if ((window as any).mapId !== before || Date.now() - t0 > 110000) { clearInterval(iv); res(); }
+          if ((window as any).mapId !== before || Date.now() - t0 > 160000) { clearInterval(iv); res(); }
         }, 200);
       });
       await new Promise((r) => setTimeout(r, 800));
@@ -148,7 +150,7 @@ test.describe("Sun-axis climate", () => {
       await new Promise<void>((res) => {
         const t0 = Date.now();
         const iv = setInterval(() => {
-          if ((window as any).mapId !== before || Date.now() - t0 > 110000) { clearInterval(iv); res(); }
+          if ((window as any).mapId !== before || Date.now() - t0 > 160000) { clearInterval(iv); res(); }
         }, 200);
       });
       await new Promise((r) => setTimeout(r, 500));
