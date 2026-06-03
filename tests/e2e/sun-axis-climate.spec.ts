@@ -62,6 +62,7 @@ test.describe("Sun-axis climate", () => {
   });
 
   test("Sun-axis mode produces the expected climate + cascade + population signature", async ({ page }) => {
+    test.setTimeout(120000); // whole-world regeneration can be slow on constrained CI runners
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
     page.on("console", (m) => m.type() === "error" && errors.push(`console.error: ${m.text()}`));
@@ -134,6 +135,7 @@ test.describe("Sun-axis climate", () => {
   });
 
   test("Sun-axis world round-trips through .map save/load", async ({ page }) => {
+    test.setTimeout(180000); // full SVG serialization + reload is heavy; generous for slow runners
     const result = await page.evaluate(async () => {
       options.climateModel = "sunAxis";
       options.sunAxis.axialTilt = 22;

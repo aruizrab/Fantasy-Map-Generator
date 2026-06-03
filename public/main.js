@@ -1167,7 +1167,8 @@ function generatePrecipitationSunAxis() {
   const neighbors = cells.c;
 
   const FREEZE = 0; // °C below which convective uplift (and rainfall) is suppressed
-  const tempSpan = Math.max(1, cfg.peakTemp - FREEZE);
+  // use the same clamped peak as the temperature model so warmth normalization matches the temp ceiling
+  const tempSpan = Math.max(1, minmax(+cfg.peakTemp || 0, -50, 50) - FREEZE);
   // resolution-aware: denser grids have more cells per physical distance, so moisture travels more
   // cells to cover the same ground (same idea as Classic's cellsNumberModifier)
   // moisture travels more cells on denser grids to cover the same physical distance: cells-per-
