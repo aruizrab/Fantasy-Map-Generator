@@ -192,6 +192,10 @@ function getDefaultSunAxisConfig() {
     oceanThermalInertia: 0.35,
     // Extra cooling (deg C) applied to day/night-band cells that radiate heat every rotation.
     bandCoolingC: 8,
+    // Meridional heat transport (atmosphere/ocean carrying heat from the hot lit cap to the cold night
+    // cap): 0 = none (pure radiative, very cold dark side), 1 = strong mixing. Warms the dark side and
+    // flattens the gradient. Exposed in the UI as "Heat transport".
+    heatTransport: 0.4,
 
     // --- Moisture / precipitation model (T3) ---
     // Base evaporation rate from ocean cells (dimensionless source strength).
@@ -1063,13 +1067,35 @@ function calculateTemperaturesSunAxis() {
   // precompute per-row sea-level temperature and a global mean for ocean thermal inertia
   const rowCount = Math.ceil(cells.i.length / grid.cellsX);
   const rowTemp = new Float64Array(rowCount);
-  let meanSeaTemp = 0;
   for (let r = 0, rowCellId = 0; rowCellId < cells.i.length; r++, rowCellId += grid.cellsX) {
     const [, y] = grid.points[rowCellId];
     const lat = mapCoordinates.latN - (y / graphHeight) * mapCoordinates.latT; // [90; -90]
     rowTemp[r] = seaLevelTemp(lat);
-    meanSeaTemp += rowTemp[r];
   }
+
+  // Meridional heat transport: a real atmosphere/ocean advects heat from the hot lit cap toward the
+  // cold night cap, warming the dark side and flattening the gradient (radiative equilibrium alone is
+  // far too extreme). Modeled as meridional diffusion of the latitude temperature profile; strength is
+  // the tunable `heatTransport` coefficient (0 = none/pure radiative, 1 = strong mixing).
+  const heatTransport = minmax(cfg.heatTransport ?? 0, 0, 1);
+  if (heatTransport > 0 && rowCount > 2) {
+    const iterations = Math.round(heatTransport * rowCount * rowCount * 0.15);
+    const k = 0.5;
+    let a = rowTemp;
+    let b = new Float64Array(rowCount);
+    for (let it = 0; it < iterations; it++) {
+      for (let r = 0; r < rowCount; r++) {
+        const lo = a[r === 0 ? 0 : r - 1];
+        const hi = a[r === rowCount - 1 ? rowCount - 1 : r + 1];
+        b[r] = a[r] + k * (lo + hi - 2 * a[r]);
+      }
+      const tmp = a; a = b; b = tmp;
+    }
+    if (a !== rowTemp) rowTemp.set(a);
+  }
+
+  let meanSeaTemp = 0;
+  for (let r = 0; r < rowCount; r++) meanSeaTemp += rowTemp[r];
   meanSeaTemp /= rowCount;
 
   const inertia = minmax(cfg.oceanThermalInertia, 0, 1);

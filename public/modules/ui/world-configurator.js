@@ -63,6 +63,7 @@ function editWorld() {
     ensureEl("sunAxisSubsolarInput").value = sa.subsolarLatitude === null || sa.subsolarLatitude === undefined ? "" : sa.subsolarLatitude;
     ensureEl("sunAxisPoleInput").value = sa.sunwardPole || "north";
     ensureEl("sunAxisRotationInput").checked = sa.rotationBand !== false;
+    ensureEl("sunAxisHeatInput").value = ensureEl("sunAxisHeatOutput").value = sa.heatTransport;
     ensureEl("sunAxisTravelInput").value = ensureEl("sunAxisTravelOutput").value = sa.moistureTravel;
     ensureEl("sunAxisWetnessInput").value = ensureEl("sunAxisWetnessOutput").value = sa.precipScale;
     updateClimateModelVisibility();
@@ -100,6 +101,13 @@ function editWorld() {
       const v = target.value;
       options.sunAxis.subsolarLatitude = v === "" ? null : minmax(Number(v), -90, 90);
       updateSubsolarDerived();
+      if (ensureEl("wcAutoChange").checked) updateWorld();
+      return;
+    }
+    if (stored === "sunAxisHeat") {
+      ensureEl("sunAxisHeatInput").value = target.value;
+      ensureEl("sunAxisHeatOutput").value = target.value;
+      options.sunAxis.heatTransport = minmax(Number(target.value), 0, 1);
       if (ensureEl("wcAutoChange").checked) updateWorld();
       return;
     }
