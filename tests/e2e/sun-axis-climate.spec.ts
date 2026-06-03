@@ -105,7 +105,8 @@ test.describe("Sun-axis climate", () => {
         distinctBiomes: biomeSet.size,
         hasHotDesert: biomeSet.has(1),
         hasCold: biomeSet.has(9) || biomeSet.has(10) || biomeSet.has(11),
-        hasLush: [5, 6, 7, 8, 12].some((b) => biomeSet.has(b)),
+        // vegetated (non-desert, non-ice) land: forests/wetland OR grassland/savanna
+        hasVegetated: [3, 4, 5, 6, 7, 8, 12].some((b) => biomeSet.has(b)),
         hasBurgs: pack.burgs.length > 1,
         hasRivers: pack.rivers.length > 0,
         hasStates: pack.states.length > 1,
@@ -124,7 +125,7 @@ test.describe("Sun-axis climate", () => {
     // proven deterministically by the T4 cascade harness; here we assert robust variety)
     expect(data.distinctBiomes).toBeGreaterThanOrEqual(4);
     expect(data.hasCold).toBe(true);
-    expect(data.hasLush).toBe(true);
+    expect(data.hasVegetated).toBe(true);
     // downstream generators ran end-to-end
     expect(data.hasBurgs).toBe(true);
     expect(data.hasRivers).toBe(true);

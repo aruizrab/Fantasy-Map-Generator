@@ -119,13 +119,15 @@ block `options.sunAxis` (defaults from `getDefaultSunAxisConfig()` in `public/ma
 **round-trip through `.map` save/load** automatically. Old maps load as Classic.
 
 ### Geometry (UI)
-| Field | Default | Effect |
+| Field (UI label) | Default | Effect |
 |-------|---------|--------|
 | Climate model | `classic` | Toggle Classic ⇄ Sun-axis. |
-| `axialTilt` | 18° | Angle between spin axis and planet→star line. 0 = sun fixed over the sunward pole; larger = sub-solar point further from the pole, wider day/night band. |
-| `subsolarLatitude` | auto (=90−tilt) | Override the sub-solar latitude; `null`/Auto derives it. |
-| `sunwardPole` | `north` | Which pole faces the star (the lit cap). `south` mirrors everything. |
-| `rotationBand` | true | If on, the day/night band radiates heat each rotation (cooler band). |
+| `axialTilt` (Axial tilt) | 18° | Angle between spin axis and planet→star line. 0 = sun fixed over the sunward pole; larger = sub-solar point further from the pole, wider day/night band, and a *larger warm hemisphere*. |
+| `subsolarLatitude` (Sub-solar lat) | auto (=90−tilt) | Override the sub-solar latitude; `null`/Auto derives it. |
+| `sunwardPole` (Sunward pole) | `north` | Which pole faces the star (the lit cap). `south` mirrors everything. |
+| `rotationBand` (Rotating day/night band) | true | If on, the day/night band radiates heat each rotation (cooler band). |
+| `moistureTravel` (Moisture reach) | 9 | How far ocean moisture reaches inland (e-folding length in cells @ 10k-cell reference). Lower = drier, larger desert interiors. |
+| `precipScale` (Wetness) | 1.0 | Overall wetness multiplier. <1 = drier world (more desert), >1 = wetter. |
 
 ### Temperature coefficients
 | Coefficient | Default | Effect |
@@ -140,15 +142,26 @@ block `options.sunAxis` (defaults from `getDefaultSunAxisConfig()` in `public/ma
 | Coefficient | Default | Effect |
 |-------------|---------|--------|
 | `convectionStrength` | 1.6 | Convergence/convective rainfall over the hot cap **and** inland rainout rate (coupled). Higher = wetter coasts, sharper desert interiors. |
-| `moistureTravel` | 12 | E-folding inland travel length (cells @ 10k-cell reference). Smaller = sharper coast→interior drying (more desert). |
+| `moistureTravel` (Moisture reach) | 9 | E-folding inland travel length (cells @ 10k-cell reference). Smaller = sharper coast→interior drying (more desert). UI-exposed. |
 | `orographicFactor` | 1.0 | Strength of orographic (terrain-lift) rainfall. |
 | `subsidenceDryness` | 0.35 | Dryness of the descending subtropical-like belt (0..1). |
-| `precipScale` | 1.0 | Global precipitation multiplier (on top of the `precInput` slider). |
+| `precipScale` (Wetness) | 1.0 | Global precipitation multiplier (on top of the `precInput` slider). UI-exposed. |
 | `oceanEvaporation`, `evaporationTempFactor` | 1.0, 0.03 | Reserved evaporation-source knobs. |
 
-**Tuning tips:** for a wetter world raise `convectionStrength`/`precipScale` or `moistureTravel`;
-for more extensive deserts lower `moistureTravel`. For a milder planet raise `insolationExponent`
-toward 1 and `oceanThermalInertia`. For a narrow lit cap with a wide cycling band, raise `axialTilt`.
+The precipitation base magnitude is tuned so the wettest coasts land in the forest/rainforest range
+and the **wetland** biome stays rare — so a warm lit cap spans desert → grassland → forest rather
+than turning into uniform wetland.
+
+**Tuning tips (in the Configure World dialog):**
+- **World too wet / too many wetlands** (common at high `axialTilt`, where the *entire* sunward
+  hemisphere is warm and ocean-fed): lower **Wetness** (e.g. 0.6) and/or **Moisture reach** (e.g. 5)
+  to expand deserts and dry continental interiors.
+- **World too dry / too much desert:** raise **Wetness** and/or **Moisture reach**.
+- Note: results are geography-dependent — continents with lots of coastline (archipelagos, narrow
+  landmasses) are wetter because ocean moisture reaches everywhere; only large landmasses develop
+  deep desert interiors.
+- For a milder planet raise `insolationExponent` toward 1 and `oceanThermalInertia`. For a narrow
+  lit cap with a wide cycling band (and a smaller warm hemisphere), *lower* `axialTilt`.
 
 ---
 

@@ -2539,6 +2539,20 @@
                   <span class="checkbox-label">Rotating day/night band</span>
                 </label>
               </div>
+              <div>
+                <label data-tip="How far ocean moisture reaches inland before raining out. Lower = drier, larger desert interiors">
+                  <i>Moisture reach:</i>
+                  <input id="sunAxisTravelInput" data-stored="sunAxisTravel" type="number" min="2" max="30" step="1" style="width: 4em" />
+                  <input id="sunAxisTravelOutput" data-stored="sunAxisTravel" type="range" min="2" max="30" step="1" />
+                </label>
+              </div>
+              <div>
+                <label data-tip="Overall wetness of the world. Below 1 = drier (more desert), above 1 = wetter">
+                  <i>Wetness:</i>
+                  <input id="sunAxisWetnessInput" data-stored="sunAxisWetness" type="number" min="0.2" max="2" step="0.1" style="width: 4em" />
+                  <input id="sunAxisWetnessOutput" data-stored="sunAxisWetness" type="range" min="0.2" max="2" step="0.1" />
+                </label>
+              </div>
             </div>
             <div>
               <i data-locked="0" id="lock_temperatureEquator" class="icon-lock-open"></i>

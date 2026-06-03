@@ -66,6 +66,17 @@ Playwright e2e suite (`tests/e2e/sun-axis-climate.spec.ts`).
 
 ## Decisions log
 
+- 2026-06-04: USER-REPORTED FIX (tilt 65, south-facing, whole world → entire south was wetland).
+  Root cause (measured in the real app): at high `axialTilt` the *entire* sunward hemisphere is warm,
+  real continents touch ocean on several sides, and the precip *magnitude* was high enough that almost
+  any warm cell within a few cells of ocean exceeded the wetland threshold (74% of southern land was
+  Wetland). The earlier single-coast synthetic validation hid this. Fixes: (1) lowered precip base
+  magnitude 50→35 and `moistureTravel` default 12→9 so the wettest coasts land in forest/rainforest
+  and wetland stays rare; (2) EXPOSED `moistureTravel` ("Moisture reach") and `precipScale` ("Wetness")
+  as UI sliders so aridity is user-tunable. Re-measured tilt-65-south: wetland 74%→0-19%, now a
+  desert/grassland/forest mix. Existing e2e signature relaxed to "vegetated" (forest OR grassland) to
+  stay robust on drier maps. All sun-axis e2e + 65 unit tests pass.
+
 - 2026-06-03: Pinned base commit `fa5016a`. Confirmed climate lives in `public/main.js`
   (not `src/`), contrary to the master prompt's "two functions" assumption — but the
   *concept* holds: two functions populate temp/prec. Will edit them in place behind a toggle.

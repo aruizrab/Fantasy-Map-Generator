@@ -206,8 +206,10 @@ function getDefaultSunAxisConfig() {
     orographicFactor: 1.0,
     // E-folding travel length (in cells, at the 10k-cell reference resolution) for ocean moisture
     // advecting inland before it rains out. Smaller = sharper coast-to-interior drying (desert interiors).
-    moistureTravel: 12,
-    // Global precipitation scale (matches Classic's precInput role).
+    // Exposed in the UI as "Moisture reach".
+    moistureTravel: 9,
+    // Global precipitation scale (on top of the precInput slider). <1 = drier world (more desert),
+    // >1 = wetter world. Exposed in the UI as "Wetness".
     precipScale: 1.0
   };
 }
@@ -1176,7 +1178,9 @@ function generatePrecipitationSunAxis() {
   const resolutionScale = (pointsInput.dataset.cells / 10000) ** 0.5;
   const travel = Math.max(1, cfg.moistureTravel * resolutionScale);
   const precInputModifier = precInput.value / 100;
-  const outputScale = 50 * precInputModifier * cfg.precipScale;
+  // base magnitude tuned so the wettest coasts land in the forest/rainforest range and the wetland
+  // biome stays rare; the warm lit cap then spans desert -> grassland -> forest instead of all-wetland
+  const outputScale = 35 * precInputModifier * cfg.precipScale;
 
   // convective uplift potential of a cell, 0 (frozen) .. ~1 (peak warmth over the lit cap)
   const warmth = i => Math.max(0, Math.min(1, (temp[i] - FREEZE) / tempSpan));
