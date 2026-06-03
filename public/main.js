@@ -997,10 +997,96 @@ function getSunAxisGeometry() {
   return {cfg, tilt, sign, subsolarLatitude: sign * Math.abs(subsolar)};
 }
 
-// T1 placeholder: until T2 lands, the Sun-axis temperature model falls back to the Classic model so
-// flipping the toggle never breaks generation. Replaced by the real insolation model in T2.
+// Sun-axis temperature model (T2). The spin axis points near the star, so the sub-solar latitude
+// phi_s (90 - tilt) behaves like an extreme solar "declination" near the pole. We integrate the
+// daily-mean insolation over one rotation per latitude (phi_s playing the declination role in the
+// standard insolation integral) and map it to an equilibrium sea-level temperature:
+//   - Permanent-day cap (poleward of +tilt on the sunward side): the sun never sets, so insolation
+//     accumulates with no night to radiate it away -> the *integrated-warmth* peak sits in the lit
+//     cap (toward the lit pole), NOT at the sub-solar latitude.
+//   - Sub-solar latitude phi_s: highest *instantaneous* (noon) sun -> strongest peak heating, but a
+//     lower integrated total than the cap. Both are modeled (and logged when DEBUG.temperature).
+//   - Day/night band (|phi| < tilt): cools every rotation -> an extra diurnal cooling penalty.
+//   - Permanent-night cap (poleward of -tilt): no sunlight -> floor temperature.
+// Altitude lapse and ocean thermal inertia are applied per cell. All coefficients live in options.sunAxis.
 function calculateTemperaturesSunAxis() {
-  calculateTemperaturesClassic();
+  const cells = grid.cells;
+  cells.temp = new Int8Array(cells.i.length);
+
+  const {cfg, subsolarLatitude: decl} = getSunAxisGeometry();
+  const exponent = +heightExponentInput.value;
+  const DEG = Math.PI / 180;
+
+  // daily-mean insolation factor over one rotation, with phi_s as the solar declination.
+  // returns {H: mean insolation in [0,1], dayFraction: fraction of rotation the sun is up}
+  function insolation(latDeg) {
+    const phi = latDeg * DEG;
+    const d = decl * DEG;
+    const cosH0 = -Math.tan(phi) * Math.tan(d);
+    let h0;
+    if (cosH0 <= -1) h0 = Math.PI; // permanent day
+    else if (cosH0 >= 1) h0 = 0; // permanent night
+    else h0 = Math.acos(cosH0);
+    const H = (h0 * Math.sin(phi) * Math.sin(d) + Math.cos(phi) * Math.cos(d) * Math.sin(h0)) / Math.PI;
+    return {H: Math.max(0, H), dayFraction: h0 / Math.PI};
+  }
+
+  // deterministic global maximum insolation (sampled over the whole sphere, independent of map crop)
+  let Hmax = 0;
+  for (let l = -90; l <= 90; l += 0.5) Hmax = Math.max(Hmax, insolation(l).H);
+  if (!(Hmax > 0)) Hmax = 1; // degenerate guard (e.g. fully dark crop)
+
+  function seaLevelTemp(latDeg) {
+    const {H, dayFraction} = insolation(latDeg);
+    const shaped = Math.pow(H / Hmax, cfg.insolationExponent);
+    let t = cfg.nightCapTemp + (cfg.peakTemp - cfg.nightCapTemp) * shaped;
+    // diurnal cooling for the rotating day/night band (max where the cell is lit ~half the rotation)
+    if (cfg.rotationBand) t -= cfg.bandCoolingC * 4 * (1 - dayFraction) * dayFraction;
+    return t;
+  }
+
+  // temperature drops by 6.5°C per 1km of altitude (same lapse model as Classic)
+  function getAltitudeTemperatureDrop(h) {
+    if (h < 20) return 0;
+    const height = Math.pow(h - 18, exponent);
+    return rn((height / 1000) * 6.5);
+  }
+
+  // precompute per-row sea-level temperature and a global mean for ocean thermal inertia
+  const rowCount = Math.ceil(cells.i.length / grid.cellsX);
+  const rowTemp = new Float64Array(rowCount);
+  let meanSeaTemp = 0;
+  for (let r = 0, rowCellId = 0; rowCellId < cells.i.length; r++, rowCellId += grid.cellsX) {
+    const [, y] = grid.points[rowCellId];
+    const lat = mapCoordinates.latN - (y / graphHeight) * mapCoordinates.latT; // [90; -90]
+    rowTemp[r] = seaLevelTemp(lat);
+    meanSeaTemp += rowTemp[r];
+  }
+  meanSeaTemp /= rowCount;
+
+  const inertia = minmax(cfg.oceanThermalInertia, 0, 1);
+  for (let r = 0, rowCellId = 0; rowCellId < cells.i.length; r++, rowCellId += grid.cellsX) {
+    const tSea = rowTemp[r];
+    for (let cellId = rowCellId; cellId < rowCellId + grid.cellsX && cellId < cells.i.length; cellId++) {
+      const h = cells.h[cellId];
+      const t = h < 20
+        ? tSea + (meanSeaTemp - tSea) * inertia // oceans relax toward the global mean (thermal inertia)
+        : tSea - getAltitudeTemperatureDrop(h); // land cools with altitude
+      cells.temp[cellId] = minmax(Math.round(t), -128, 127);
+    }
+  }
+
+  if (DEBUG.temperature) {
+    // report both peaks to confirm they are modeled and do not coincide
+    let peakMeanLat = 0, peakMean = -Infinity, peakNoonLat = 0, peakNoon = -1;
+    for (let lat = 90; lat >= -90; lat -= 0.5) {
+      const t = seaLevelTemp(lat);
+      const noon = Math.max(0, Math.cos((lat - decl) * DEG)); // instantaneous noon insolation
+      if (t > peakMean) {peakMean = t; peakMeanLat = lat;}
+      if (noon > peakNoon) {peakNoon = noon; peakNoonLat = lat;}
+    }
+    console.info(`Sun-axis: subsolar=${rn(decl)}°  integrated-warmth peak @ ${rn(peakMeanLat)}° (${rn(peakMean)}°C)  instantaneous-noon peak @ ${rn(peakNoonLat)}°`);
+  }
 }
 
 function calculateTemperaturesClassic() {

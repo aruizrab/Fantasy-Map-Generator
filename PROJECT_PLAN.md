@@ -47,9 +47,9 @@ verbatim in `ARCHITECTURE.md` for diff reference.
 | Task | Description | Deps | Status |
 |------|-------------|------|--------|
 | T0 | Architecture map, pin commit, baseline | — | PASS |
-| T1 | Planetary config + UI + save/load + Classic toggle | T0 | IMPL DONE (evaluating) |
-| T2 | Insolation & temperature model | T1 | BLOCKED |
-| T3 | Moisture circulation & precipitation model | T2 | BLOCKED |
+| T1 | Planetary config + UI + save/load + Classic toggle | T0 | PASS |
+| T2 | Insolation & temperature model | T1 | IMPL DONE (evaluating) |
+| T3 | Moisture circulation & precipitation model | T2 | IN PROGRESS |
 | T4 | Biome cascade verification / retune | T3 | BLOCKED |
 | T5 | River & lake cascade verification | T3 | BLOCKED |
 | T6 | Population/burg/location cascade verification | T4 | BLOCKED |
@@ -65,6 +65,13 @@ Status legend: BLOCKED → IN PROGRESS → IMPL DONE → PASS / FAIL (evaluator-
   *concept* holds: two functions populate temp/prec. Will edit them in place behind a toggle.
 - 2026-06-03: Regression strategy = structural (Classic toggle reuses original algorithm)
   rather than image-diff, because the container can't practically render maps headlessly.
+- 2026-06-03: T1 PASS (independent evaluator). Toggle + config + UI + save/load round-trip +
+  Classic byte-identical to upstream all verified; build ✓, 65/65 tests ✓.
+- 2026-06-03: T2 implemented. Sun-axis temperature uses the standard daily-mean insolation integral
+  with phi_s (=90−tilt) as solar "declination". Validated by prototype + integration harness against
+  a synthetic grid: lit cap warmest (integrated-warmth peak toward lit pole), instantaneous-noon peak
+  at sub-solar latitude (the two peaks do NOT coincide, per ground truth), night cap frozen, ocean
+  thermal inertia + altitude lapse + diurnal band cooling applied, no NaN/Inf, Int8-bounded.
 - 2026-06-03: T0 PASS. Build ✓, 65/65 vitest ✓. ARCHITECTURE.md written with all landmarks
   traced to file:line. Confirmed `options` round-trips whole via save/load index 19 — new config
   fields auto-persist; load must merge defaults for backward compat. Confirmed biome matrix is
