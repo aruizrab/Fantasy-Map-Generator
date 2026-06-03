@@ -48,10 +48,10 @@ verbatim in `ARCHITECTURE.md` for diff reference.
 |------|-------------|------|--------|
 | T0 | Architecture map, pin commit, baseline | — | PASS |
 | T1 | Planetary config + UI + save/load + Classic toggle | T0 | PASS |
-| T2 | Insolation & temperature model | T1 | IMPL DONE (evaluating) |
-| T3 | Moisture circulation & precipitation model | T2 | IN PROGRESS |
-| T4 | Biome cascade verification / retune | T3 | BLOCKED |
-| T5 | River & lake cascade verification | T3 | BLOCKED |
+| T2 | Insolation & temperature model | T1 | PASS |
+| T3 | Moisture circulation & precipitation model | T2 | IMPL DONE (evaluating) |
+| T4 | Biome cascade verification / retune | T3 | IN PROGRESS |
+| T5 | River & lake cascade verification | T3 | IN PROGRESS |
 | T6 | Population/burg/location cascade verification | T4 | BLOCKED |
 | T7 | End-to-end integration + regression | T4,T5,T6 | BLOCKED |
 | T8 | Documentation & handoff | T7 | BLOCKED |
@@ -67,6 +67,14 @@ Status legend: BLOCKED → IN PROGRESS → IMPL DONE → PASS / FAIL (evaluator-
   rather than image-diff, because the container can't practically render maps headlessly.
 - 2026-06-03: T1 PASS (independent evaluator). Toggle + config + UI + save/load round-trip +
   Classic byte-identical to upstream all verified; build ✓, 65/65 tests ✓.
+- 2026-06-03: T2 PASS (independent evaluator: lit cap 31°C vs night −43°C, both warmth peaks
+  modeled & distinct, no NaN at poles/edge tilts, Classic untouched, south-pole mirror works).
+- 2026-06-03: T3 implemented. Sun-axis precipitation = ocean-moisture "optical depth" (heap Dijkstra,
+  each inland step costs more where hotter so moist air rains out fast over the convective cap →
+  desert interiors), × convective uplift (warmth-driven, peaks over lit cap), × subsidence dry belt,
+  + orographic lift. Resolution-aware travel; reuses precInput slider. Validated by prototype +
+  integration harness on the REAL function: wet lit coast 69, desert interior 14, orographic boost,
+  dry band/night cap, bounded budget, no NaN. Classic precipitation untouched.
 - 2026-06-03: T2 implemented. Sun-axis temperature uses the standard daily-mean insolation integral
   with phi_s (=90−tilt) as solar "declination". Validated by prototype + integration harness against
   a synthetic grid: lit cap warmest (integrated-warmth peak toward lit pole), instantaneous-noon peak

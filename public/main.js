@@ -1140,10 +1140,114 @@ function generatePrecipitation() {
   return generatePrecipitationClassic();
 }
 
-// T1 placeholder: until T3 lands, the Sun-axis moisture model falls back to the Classic model.
-// Replaced by the real moisture-circulation model in T3.
+// Sun-axis moisture & precipitation model (T3). Permanent heating over the lit cap drives
+// convection/convergence; moist air is drawn in from the oceans and rises over the hot cap,
+// producing a standing rain belt where ocean moisture is reachable (coasts/ocean-adjacent lit land).
+// Moisture rains out as it travels inland — and rains out FASTER over the hot, convective cap — so
+// the baked continental interior starves into desert. Descending-air belts between the hot cap and
+// the cold cap are dry; the permanent-night cap is cold/frozen and dry. Orographic lift adds rain
+// where moist air climbs terrain. All coefficients live in options.sunAxis; the global precInput
+// slider still scales output. Output -> grid.cells.prec (Uint8Array).
 function generatePrecipitationSunAxis() {
-  return generatePrecipitationClassic();
+  TIME && console.time("generatePrecipitation");
+  prec.selectAll("*").remove();
+  const {cells, cellsX} = grid;
+  const n = cells.i.length;
+  cells.prec = new Uint8Array(n);
+
+  const {cfg} = getSunAxisGeometry();
+  const temp = cells.temp;
+  const h = cells.h;
+  const neighbors = cells.c;
+
+  const FREEZE = 0; // °C below which convective uplift (and rainfall) is suppressed
+  const tempSpan = Math.max(1, cfg.peakTemp - FREEZE);
+  // resolution-aware: denser grids have more cells per physical distance, so moisture travels more
+  // cells to cover the same ground (same idea as Classic's cellsNumberModifier)
+  const cellsNumberModifier = (pointsInput.dataset.cells / 10000) ** 0.25;
+  const travel = Math.max(1, cfg.moistureTravel * cellsNumberModifier);
+  const precInputModifier = precInput.value / 100;
+  const outputScale = 50 * precInputModifier * cfg.precipScale;
+
+  // convective uplift potential of a cell, 0 (frozen) .. ~1 (peak warmth over the lit cap)
+  const warmth = i => Math.max(0, Math.min(1, (temp[i] - FREEZE) / tempSpan));
+
+  // 1) moisture "optical depth" from the oceans via Dijkstra (binary min-heap). Each inland step
+  //    costs 1 + convectionStrength * warmth: moist air rains out faster over the hot convective cap,
+  //    so the cost (and therefore dryness) climbs quickly across baked lit-cap interiors.
+  const dist = new Float64Array(n).fill(Infinity);
+  const heap = []; // array of cell ids, ordered by dist via siftUp/siftDown
+  const hpush = id => {
+    heap.push(id);
+    let c = heap.length - 1;
+    while (c > 0) {
+      const p = (c - 1) >> 1;
+      if (dist[heap[p]] <= dist[heap[c]]) break;
+      [heap[p], heap[c]] = [heap[c], heap[p]];
+      c = p;
+    }
+  };
+  const hpop = () => {
+    const top = heap[0];
+    const last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      let p = 0;
+      for (;;) {
+        const l = 2 * p + 1, r = l + 1;
+        let s = p;
+        if (l < heap.length && dist[heap[l]] < dist[heap[s]]) s = l;
+        if (r < heap.length && dist[heap[r]] < dist[heap[s]]) s = r;
+        if (s === p) break;
+        [heap[s], heap[p]] = [heap[p], heap[s]];
+        p = s;
+      }
+    }
+    return top;
+  };
+  for (let i = 0; i < n; i++) if (h[i] < 20) {dist[i] = 0; hpush(i);}
+  while (heap.length) {
+    const i = hpop();
+    const di = dist[i];
+    for (const nb of neighbors[i]) {
+      if (h[nb] < 20) continue; // moisture paths run over land; oceans are the dist-0 sources
+      const stepCost = 1 + cfg.convectionStrength * warmth(nb); // faster rainout where hotter
+      const nd = di + stepCost;
+      if (nd < dist[nb]) {dist[nb] = nd; hpush(nb);}
+    }
+  }
+
+  // 2) descending-air dry belt: subsidence equatorward of the lit-cap convergence (subtropics-like).
+  const sign = cfg.sunwardPole === "south" ? -1 : 1;
+  const beltCenter = sign * Math.max(0, +cfg.axialTilt - 25);
+  const beltWidth = 22;
+  const subsidence = lat => cfg.subsidenceDryness * Math.exp(-(((lat - beltCenter) / beltWidth) ** 2));
+
+  // 3) per-cell precipitation
+  let totalLit = 0, totalAll = 0;
+  for (let rowCellId = 0; rowCellId < n; rowCellId += cellsX) {
+    const [, y] = grid.points[rowCellId];
+    const lat = mapCoordinates.latN - (y / graphHeight) * mapCoordinates.latT;
+    const dry = 1 - subsidence(lat);
+    for (let i = rowCellId; i < rowCellId + cellsX && i < n; i++) {
+      if (h[i] < 20) continue; // water cells handled by the engine separately
+      const reach = Math.exp(-dist[i] / travel); // ocean moisture availability after rainout
+      const convective = cfg.convectionStrength * warmth(i);
+      // orographic lift: moist air climbing terrain from the ocean-ward (lower optical-depth) neighbour
+      let upwindH = h[i];
+      for (const nb of neighbors[i]) if (dist[nb] < dist[i] && h[nb] < upwindH) upwindH = h[nb];
+      const oro = (cfg.orographicFactor * Math.max(0, h[i] - upwindH)) / 20;
+      const p = outputScale * reach * (convective + oro) * dry;
+      cells.prec[i] = minmax(Math.round(p), 0, 255);
+      totalAll += cells.prec[i];
+      if (warmth(i) > 0.6) totalLit += cells.prec[i];
+    }
+  }
+
+  DEBUG.precipitation &&
+    console.info(`Sun-axis precipitation: total=${totalAll}, lit-cap total=${totalLit}, travel=${rn(travel, 1)} cells`);
+
+  TIME && console.timeEnd("generatePrecipitation");
 }
 
 function generatePrecipitationClassic() {
